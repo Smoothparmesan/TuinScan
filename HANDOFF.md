@@ -1,28 +1,35 @@
 # HANDOFF — Tuinscan
 
 ## Status (2026-11-25)
-- Alle code-taken (1-15) klaar; `uv run pytest` (237) en `uv run ruff check .` groen. Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`.
-- Commando's: `inspecteer`, `download`, `voorbeeld`, `tuinen`, `score`, `rapport`, `terugkoppeling maak|lees`, `alles`, `opruimen`. Zie README.md.
+- PoC code klaar (plan-taken 1–15 + eindreview-fixes). `uv run pytest -q`: 316 passed; `uv run ruff check .` schoon. Branch `claude/zen-mayer-2lnpdp`.
+- Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`. PDOK-feiten + kalibratie: `docs/pdok-bronnen.md`. Gebruik: `README.md`.
+- Spec (Claude Docs "Specsheet Tuinscan") bijgewerkt met de gemeten PDOK-feiten (zomer-CIR bestaat).
 
 ## Draaien
-`uv sync` → config kopiëren uit `config/tuinscan.example.yaml` (data buiten OneDrive) → `uv run tuinscan <stap> --config mijn.yaml`. Zonder Tobias-export: `download` → `voorbeeld` → `tobias.bestand: voorbeeld_export.xlsx` → `inspecteer`.
+`uv sync` → `config/tuinscan.example.yaml` kopiëren (data buiten OneDrive) → `download` → `kalibreer` (drempels per laag invullen) → `tuinen` (check in QGIS) → `score` → `rapport` → `terugkoppeling maak|lees`. Zonder Tobias-export: `voorbeeld` na `download`.
+
+## Testresultaten echte PDOK (cloud)
+- Houten-rijtjeswijk, 80 VHE's, voor+achter: koppeling+tuinvlak 100 %; download ~80 s, score 8 s (≈35 s voor 300 VHE's).
+- Na kalibratie als groen geteld: wegen 4/2 %, daken 9/5 %, BGT-groen 84/89 % (2025/2024). Top-3 handmatig bekeken: redenen plausibel.
+- Zomerfoto's zijn geen true-ortho: daken hellen 0,5–2 m (Houten) tot 3,5–5 m (Amsterdam) → marges rond panden in config.
+- Amsterdam-centrum: 1 van 20 VHE's kreeg een tuin (dichte binnenstad zonder voortuinen); geen fout.
 
 ## Open
-- Task 6 (laptop): `/vsicurl/` en PDOK achter de bedrijfsproxy; QGIS-check van uitlijning voor de echte wijk.
-- Task 16 (laptop): echte run met de Tobias-export; kolommen.yaml controleren.
-- Smoke (cloud, echte PDOK, Houten 300x300 m, 40 voorbeeld-VHE's): download ~80 s; tuinen/score/rapport samen < 30 s; koppeling+tuinvlak 100 % bij `[voor]` en `[voor, achter]`; scores 0-52,8 (mediaan 16, 38 van 40 > 0). Amsterdam-centrum gaf 5 %: dichte binnenstad, geen voortuinen. Contouren in de detailbeelden liggen op de juiste kavels; dak en BAG-pand liggen enkele meters uit elkaar (luchtfoto-scheefstand), zie QGIS-check.
+- Task 6 (laptop): PDOK en `/vsicurl/` achter de bedrijfsproxy; QGIS-check uitlijning voor de echte wijk.
+- Task 16 (laptop): echte Tobias-export → `inspecteer` → `kolommen.yaml` controleren → volledige run; `kalibreer` op de eigen wijk; ~10 tuinen in QGIS bekijken vóór de top-20 naar de wijkbeheerder gaat; daarna parameterset bevriezen.
+- Bestaande eigen configs: 6 nieuwe verplichte sleutels (`pdok.rijbaan_functies` + 5 `signalen.*`); de foutmelding noemt ze.
+- Kleine restpunten: uitvoerbestanden worden na elkaar vervangen (staat de foutenlijst open in Excel, dan blijft die oud en is de rest nieuw → sluiten en opnieuw draaien); voor/achter kan omklappen bij een achterpad dat in BGT als voetpad staat (QGIS-check).
 
 ## Belangrijkste beslissingen
-- Tobias-kolomnamen onbekend: code kent alleen canonieke namen; mapping in `invoer/kolommen.yaml` (door `inspecteer` voorgesteld op waardepatronen).
-- Complex-perceelsplitsing: Voronoi op huiszaden; correcties via `invoer/tuincorrecties.gpkg`. Voor/achter via richting naar dichtstbijzijnde BGT-wegdeel; `tuin.delen` standaard `[voor]`.
-- Ontbrekend signaal = 0 bijdrage + vlag "ontbrekend" (score wordt nooit opgeblazen).
-- Vegetatiemasker per pixel: zomer-NDVI waar CIR geldig is, anders ExG. AHN alleen actueel op PDOK (geen vorige versie).
-- R5: een tuindeel dat de lijn door het pandzwaartepunt (loodrecht op de voorzijde-vector) kruist, wordt vóór het voor/achter-labelen doorgesneden.
-- R6: complex-perceel wordt gesplitst langs verlengde pandscheidingen waar aangrenzende panden elk één woon-vbo hebben (spec: loodrecht op de BAG-pandscheidingen); Voronoi alleen anders.
+- Tobias-kolomnamen onbekend → alleen canonieke namen in code; mapping in `invoer/kolommen.yaml` (voorstel door `inspecteer` op waardepatronen).
+- Begroeiingsmasker per pixel: zomer-NDVI waar CIR geldig is, anders ExG (0,12); drempels per fotolaag via `kalibreer`; scoreschaal blijft vast.
+- Ontbrekend signaal = 0 bijdrage + vlag "ontbrekend"; herkomst (jaren, lagen, AHN-kaartbladen, parameterset) komt uit de cache-manifest.
+- R5: tuindeel dat de lijn door het pandmidden (loodrecht op de voorzijde) kruist, wordt daar doorgesneden vóór voor/achter-labeling.
+- R6: complexperceel splitsen langs verlengde pandscheidingen waar aangrenzende panden elk één woon-vbo hebben; Voronoi alleen als terugval.
 - R7: S1/S5 gebruiken NDVI alleen als beide zomers CIR hebben, anders ExG voor beide jaren.
-- R8: S4a laat de standaardberging vallen vóór de vorige-AHN-logica en bepaalt "nieuw" per pixel (geen vorige AHN op PDOK: alle pixels nieuw).
+- R8: S4a haalt eerst de standaardberging weg en beslist "nieuw" per pixel (PDOK heeft geen vorige AHN → alles nieuw); plus pandmarge 1 m, groenmarge 1 m en max hoogte 4,5 m tegen scheve daken en boomkruinen.
 
 ## Gedrag
-- `alles` stopt bij een stapfout of mislukte download (exit 1); fouten per adres stoppen niet.
-- `opruimen` vraagt de rondenaam, controleert alle doelen vóór het verwijderen (binnen invoer/cache/uitvoer), verwijdert symlinks alleen als link, bewaart `kolommen.yaml` en `tuincorrecties.gpkg` alleen met `--bewaar-correcties`.
+- `alles` stopt bij een stapfout of mislukte download (exit 1); fouten per adres stoppen niet. `kalibreer` zit niet in `alles`.
+- `opruimen` vraagt de rondenaam, verwijdert alleen cache-onderdelen, de ronde-map (met kenmerkbestand) en de exports; `kolommen.yaml` blijft, `tuincorrecties.gpkg` alleen met `--bewaar-correcties`. Andere ronde-mappen blijven staan (bevatten adressen).
 - `voorbeeld` schrijft `invoer/voorbeeld_export.xlsx` (nooit de echte export); alleen panden met precies één woon-vbo.
