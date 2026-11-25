@@ -66,6 +66,7 @@ def _tekst(w: object) -> str:
 
 def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path:
     t = cfg.terugkoppeling
+    rijen_max = max(RIJEN, len(lijst) + 1)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = BLAD
@@ -78,7 +79,7 @@ def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path
             round(float(r.score), 1), _tekst(r.reden_1), _tekst(r.reden_2),
             _tekst(r.reden_codes), None, None, None, None,
         ])  # fmt: skip
-    for rij in range(2, RIJEN + 2):
+    for rij in range(2, rijen_max + 2):
         ws.cell(row=rij, column=3).number_format = "@"
         ws.cell(row=rij, column=10).number_format = "dd-mm-yyyy"
     for i, b in enumerate(BREEDTES, start=1):
@@ -101,14 +102,20 @@ def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path
             error=f"Kies een waarde uit de lijst voor {naam}.",
         )
         dv.add(f"{get_column_letter(HEADERS.index(naam) + 1)}2:"
-               f"{get_column_letter(HEADERS.index(naam) + 1)}{RIJEN + 1}")  # fmt: skip
+               f"{get_column_letter(HEADERS.index(naam) + 1)}{rijen_max + 1}")  # fmt: skip
         ws.add_data_validation(dv)
     dd = DataValidation(
         type="date", operator="greaterThan", formula1="36526", allow_blank=True,
         showErrorMessage=True, errorTitle="Ongeldige datum", error="Vul een datum in.",
     )  # fmt: skip
-    dd.add(f"J2:J{RIJEN + 1}")
+    dd.add(f"J2:J{rijen_max + 1}")
     ws.add_data_validation(dd)
+    lw.cell(row=1, column=4, value="VHE")
+    lw.cell(row=1, column=5, value="Groep")
+    for i, r in enumerate(lijst.itertuples(), start=2):
+        c = lw.cell(row=i, column=4, value=str(r.vhe_nummer))
+        c.number_format = "@"
+        lw.cell(row=i, column=5, value=r.groep)
     lw.sheet_state = "hidden"
     pad = Path(pad)
     pad.parent.mkdir(parents=True, exist_ok=True)
@@ -117,15 +124,17 @@ def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path
 
 
 def heeft_oordelen(pad: Path) -> bool:
-    """Staat er in het bestaande bestand al minstens één Oordeel?"""
+    """Staat er in het bestaande bestand al een Oordeel, Oorzaak, Actie of Bezoekdatum?"""
     try:
-        ws = openpyxl.load_workbook(pad, read_only=True)[BLAD]
-        kol = HEADERS.index("Oordeel")
-        return any(
-            r[kol] is not None and str(r[kol]).strip() != ""
-            for r in ws.iter_rows(min_row=2, values_only=True)
-            if len(r) > kol
-        )
+        wb = openpyxl.load_workbook(pad, read_only=True)
+        try:
+            kols = [HEADERS.index(h) for h in ("Bezoekdatum", "Oordeel", "Oorzaak", "Actie")]
+            return any(
+                any(len(r) > k and r[k] is not None and str(r[k]).strip() != "" for k in kols)
+                for r in wb[BLAD].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            wb.close()
     except Exception:
         return True  # onleesbaar: liever niet overschrijven
 
@@ -140,7 +149,21 @@ def _vhe_tekst(w: object) -> str:
     return str(w).strip()
 
 
-def lees_terugkoppeling(pad: Path, cfg: Config) -> tuple[pd.DataFrame, list[str]]:
+def _bekende_vhes(wb, extra) -> dict[str, str]:
+    """VHE -> groep uit de verborgen lijst in het bestand, aangevuld met `extra` (VHE's)."""
+    bekend: dict[str, str] = {}
+    if LIJSTEN in wb.sheetnames:
+        for r in wb[LIJSTEN].iter_rows(min_row=2, min_col=4, max_col=5, values_only=True):
+            if r[0] is not None and str(r[0]).strip():
+                bekend[str(r[0]).strip()] = _tekst(r[1]) or "top"
+    for v in extra or ():
+        bekend.setdefault(str(v), "")
+    return bekend
+
+
+def lees_terugkoppeling(
+    pad: Path, cfg: Config, bekend_extra=None
+) -> tuple[pd.DataFrame, list[str]]:
     """Lees het ingevulde bestand; sleutel is de VHE, ongeldige rijen komen in de meldingen."""
     t = cfg.terugkoppeling
     wb = openpyxl.load_workbook(pad, data_only=True)
@@ -158,11 +181,27 @@ def lees_terugkoppeling(pad: Path, cfg: Config) -> tuple[pd.DataFrame, list[str]
         w = rij[i] if i is not None and i < len(rij) else None
         return None if w is None or str(w).strip() == "" else w
 
-    rijen, meldingen = [], []
+    bekend = _bekende_vhes(wb, bekend_extra)
+    zonder_nul = {int(k): k for k in bekend if k.isdigit()}
+    rijen, meldingen = {}, []
     for n, rij in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         vhe, oordeel = cel(rij, "VHE"), cel(rij, "Oordeel")
-        if vhe is None or oordeel is None:
+        if not any(cel(rij, h) for h in ("Oordeel", "Oorzaak", "Actie")):
             continue
+        if vhe is None:
+            meldingen.append(f"rij {n}: VHE ontbreekt")
+            continue
+        if oordeel is None:
+            meldingen.append(f"rij {n}: Oordeel ontbreekt")
+            continue
+        v = _vhe_tekst(vhe)
+        if bekend and v not in bekend:
+            v_int = int(v) if v.isdigit() else None
+            if v_int in zonder_nul:
+                v = zonder_nul[v_int]
+            else:
+                meldingen.append(f"rij {n}: VHE '{v}' niet in de lijst")
+                continue
         uit, fout = {}, False
         for veld in ("Oordeel", "Oorzaak", "Actie"):
             w = cel(rij, veld)
@@ -175,13 +214,15 @@ def lees_terugkoppeling(pad: Path, cfg: Config) -> tuple[pd.DataFrame, list[str]
                 fout = True
         if fout:
             continue
-        rijen.append({
-            "vhe_nummer": _vhe_tekst(vhe), "groep": _tekst(cel(rij, "Groep")) or "top",
+        if v in rijen:
+            meldingen.append(f"rij {n}: dubbele VHE, laatste telt")
+        rijen[v] = {
+            "vhe_nummer": v, "groep": _tekst(cel(rij, "Groep")) or bekend.get(v) or "top",
             "bezoekdatum": cel(rij, "Bezoekdatum"), "oordeel": uit["Oordeel"],
             "oorzaak": uit["Oorzaak"], "actie": uit["Actie"],
-        })  # fmt: skip
+        }  # fmt: skip
     kol = ["vhe_nummer", "groep", "bezoekdatum", "oordeel", "oorzaak", "actie"]
-    return pd.DataFrame(rijen, columns=kol), meldingen
+    return pd.DataFrame(list(rijen.values()), columns=kol), meldingen
 
 
 def kwaliteit(scores: pd.DataFrame, terug: pd.DataFrame) -> pd.DataFrame:
@@ -218,6 +259,6 @@ def schrijf_kwaliteit(kw: pd.DataFrame, top_n: int, pad: Path) -> None:
     m, k = int(r["n_beoordeeld"]), int(r["n_terecht"])
     gehaald = m > 0 and k / m >= CRITERIUM
     print(
-        f"Top-{top_n}: {k} van {m} terecht — succescriterium ≥ 50 %: "
+        f"Top-{top_n} per wijk: {k} van {m} terecht — succescriterium ≥ 50 %: "
         f"{'GEHAALD' if gehaald else 'NIET GEHAALD'}"
     )

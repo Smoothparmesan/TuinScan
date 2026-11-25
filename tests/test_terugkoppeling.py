@@ -147,7 +147,7 @@ def test_top20_criterion_text(capsys, tmp_path):
     })  # fmt: skip
     schrijf_kwaliteit(kwaliteit(scores, terug), 20, tmp_path / "kwaliteit.csv")
     out = capsys.readouterr().out
-    assert "Top-20: 10 van 20 terecht" in out and "GEHAALD" in out and "NIET" not in out
+    assert "Top-20 per wijk: 10 van 20 terecht" in out and "GEHAALD" in out and "NIET" not in out
     assert (tmp_path / "kwaliteit.csv").exists()
 
 
@@ -189,6 +189,45 @@ def test_cli_maak_lees_and_overwrite_guard(tmp_path, cfg, capsys):
     capsys.readouterr()
     assert main(["terugkoppeling", "lees", "--config", str(pad)]) == 0
     out = capsys.readouterr().out
-    assert "rij 3: 'x' is geen geldige Oorzaak" in out and "Top-3: 1 van 1 terecht" in out
+    assert "rij 3: 'x' is geen geldige Oorzaak" in out and "Top-3 per wijk: 1 van 1 terecht" in out
     assert (rd / "kwaliteit.csv").exists()
     assert main(["terugkoppeling", "lees", "--config", str(pad), "--bestand", "nope.xlsx"]) == 1
+
+
+def test_missing_vhe_or_oordeel_reported(tmp_path, cfg):
+    pad = maak_terugkoppelbestand(_lijst(cfg), cfg, tmp_path / "t.xlsx")
+    _vul(pad, [(2, "Oordeel", "terecht"), (3, "Oorzaak", "overhang"), (4, "Oordeel", "terecht")])
+    wb = openpyxl.load_workbook(pad)
+    wb["Terugkoppeling"]["C4"].value = None
+    wb.save(pad)
+    terug, msgs = lees_terugkoppeling(pad, cfg)
+    assert msgs == ["rij 3: Oordeel ontbreekt", "rij 4: VHE ontbreekt"]
+    assert len(terug) == 1
+
+
+def test_vhe_reconciled_against_list(tmp_path, cfg):
+    lijst = _lijst(cfg)
+    lijst.loc[lijst.index[0], "vhe_nummer"] = "000123"
+    pad = maak_terugkoppelbestand(lijst, cfg, tmp_path / "t.xlsx")
+    _vul(pad, [(2, "Oordeel", "terecht"), (3, "Oordeel", "terecht")])
+    wb = openpyxl.load_workbook(pad)
+    wb["Terugkoppeling"]["C2"].value = 123
+    wb["Terugkoppeling"]["C3"].value = "999999"
+    wb.save(pad)
+    terug, msgs = lees_terugkoppeling(pad, cfg)
+    assert terug["vhe_nummer"].tolist() == ["000123"]
+    assert msgs == ["rij 3: VHE '999999' niet in de lijst"]
+
+
+def test_group_from_list_and_duplicates(tmp_path, cfg):
+    lijst = _lijst(cfg)
+    pad = maak_terugkoppelbestand(lijst, cfg, tmp_path / "t.xlsx")
+    _vul(pad, [(2, "Oordeel", "terecht"), (3, "Oordeel", "terecht"), (9, "Oordeel", "terecht")])
+    wb = openpyxl.load_workbook(pad)
+    ws = wb["Terugkoppeling"]
+    ws["A9"].value = None
+    ws["C3"].value = ws["C2"].value
+    wb.save(pad)
+    terug, msgs = lees_terugkoppeling(pad, cfg)
+    assert msgs == ["rij 3: dubbele VHE, laatste telt"]
+    assert terug.set_index("vhe_nummer").loc[lijst.vhe_nummer[7], "groep"] == "controle"
