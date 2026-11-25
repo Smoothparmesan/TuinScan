@@ -15,6 +15,14 @@ class ConfigFout(Exception):
     """Ongeldige configuratie; de melding noemt de YAML-sleutel."""
 
 
+# Optionele drempels per luchtfotolaag (luchtfoto.lagen.<laag>.<drempel>); zonder waarde
+# geldt signalen.<drempel>. Elke drempel hoort bij de laag waarvan hij de pixels beoordeelt.
+LAAG_DREMPELS = {
+    "ndvi_drempel": ("cir_nu", "cir_vorig"),
+    "exg_drempel": ("zomer_nu", "zomer_vorig"),
+}
+
+
 @dataclass(frozen=True)
 class Gebied:
     naam: str
@@ -46,6 +54,7 @@ class Pdok:
     collecties: dict[str, str]
     velden: dict[str, str]
     voetpad_functies: list[str]
+    rijbaan_functies: list[str]  # alleen voor `kalibreer` (verharding als referentie)
     openbaar_groen_fysiek: list[str]
     workers: int
 
@@ -183,6 +192,15 @@ def _valideer(cfg: Config) -> None:
                 raise ConfigFout(f"ahn.vorige.{k}: ontbreekt")
     if not cfg.tuin.delen or not set(cfg.tuin.delen) <= {"voor", "achter"}:
         raise ConfigFout("tuin.delen: alleen 'voor' en/of 'achter' toegestaan")
+    for laag, spec in cfg.luchtfoto.lagen.items():
+        for naam, lagen in LAAG_DREMPELS.items():
+            if not isinstance(spec, dict) or naam not in spec:
+                continue
+            sleutel = f"luchtfoto.lagen.{laag}.{naam}"
+            if laag not in lagen:
+                raise ConfigFout(f"{sleutel}: alleen toegestaan bij {' of '.join(lagen)}")
+            if not _past(spec[naam], float):
+                raise ConfigFout(f"{sleutel}: verwacht een getal ({spec[naam]!r})")
 
 
 def laad_config(pad: Path) -> Config:
@@ -222,12 +240,33 @@ def _tabel(data: Any, sleutel: str) -> dict:
     return data
 
 
+def laag_drempel(cfg: Config, laag: str, naam: str) -> float:
+    """Drempel `naam` voor luchtfotolaag `laag`; zonder eigen waarde signalen.<naam>."""
+    spec = cfg.luchtfoto.lagen.get(laag) or {}
+    waarde = spec.get(naam)
+    return float(getattr(cfg.signalen, naam) if waarde is None else waarde)
+
+
+def _laag_drempels(cfg: Config) -> dict[str, dict[str, float]]:
+    uit: dict[str, dict[str, float]] = {}
+    for naam, lagen in LAAG_DREMPELS.items():
+        for laag in lagen:
+            waarde = (cfg.luchtfoto.lagen.get(laag) or {}).get(naam)
+            if waarde is not None:
+                uit.setdefault(laag, {})[naam] = float(waarde)
+    return uit
+
+
 def parameterset_hash(cfg: Config) -> str:
-    """Eerste 8 hex van sha256 over canonieke JSON van tuin, signalen en score."""
+    """Eerste 8 hex van sha256 over canonieke JSON van tuin, signalen, score en de
+    drempels per luchtfotolaag (die alleen als ze gezet zijn)."""
     payload = {
         "tuin": asdict(cfg.tuin),
         "signalen": asdict(cfg.signalen),
         "score": {k: asdict(v) for k, v in cfg.score.items()},
     }
+    drempels = _laag_drempels(cfg)
+    if drempels:
+        payload["laag_drempels"] = drempels
     canoniek = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canoniek.encode("utf-8")).hexdigest()[:8]

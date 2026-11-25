@@ -28,6 +28,7 @@ pdok:
     wegdeel_functie: functie
     begroeid_fysiek: fysiek_voorkomen
   voetpad_functies: [voetpad, voetgangersgebied, "voetpad op trap"]
+  rijbaan_functies: ["rijbaan lokale weg", "rijbaan regionale weg", "rijbaan autoweg", parkeervlak, inrit]   # only for `kalibreer`
   openbaar_groen_fysiek: [groenvoorziening, loofbos, "gemengd bos", naaldbos, struiken, houtwal, "grasland overig"]
   workers: 4
 luchtfoto:
@@ -35,6 +36,9 @@ luchtfoto:
   cir_wmts: https://service.pdok.nl/hwh/luchtfotocir/wmts/v1_0
   matrixset: "EPSG:28992"
   lagen:              # verified 2026-11-25; ortho25(IR) = summer, orthoHR = winter
+    # Optional per-layer thresholds (run `tuinscan kalibreer`): ndvi_drempel on cir_nu/cir_vorig,
+    # exg_drempel on zomer_nu/zomer_vorig; without them signalen.ndvi_drempel/exg_drempel apply.
+    # Example: cir_nu: {laag: 2025_ortho25IR, jaar: 2025, zoom: "14", ndvi_drempel: 0.25}
     zomer_nu: {laag: 2025_ortho25, jaar: 2025, zoom: "14"}
     zomer_vorig: {laag: 2024_ortho25, jaar: 2024, zoom: "14"}
     cir_nu: {laag: 2025_ortho25IR, jaar: 2025, zoom: "14"}      # summer CIR
@@ -50,8 +54,8 @@ ahn:
 tuin: {delen: [voor], max_diepte_m: 25, voorzijde_zoekafstand_m: 30, min_oppervlak_m2: 5}
 signalen:
   resolutie_m: 0.25
-  exg_drempel: 0.05
-  ndvi_drempel: 0.2   # spec says 0.3; PDOK JPEG CIR measured lower (crown median 0.27-0.33)
+  exg_drempel: 0.12   # ExG only where CIR is missing (per pixel); 0.05 classed roads/roofs green
+  ndvi_drempel: 0.2   # NDVI wherever CIR is valid; spec says 0.3, PDOK JPEG CIR measured lower
   schaduw_helderheid: 40
   s2_hoogte_m: 2.0
   s3_hoogte_m: 1.0

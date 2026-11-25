@@ -80,10 +80,10 @@ def test_schaduw_threshold():
     assert schaduw(rgb, 40).tolist() == [[True, False]]
 
 
-def test_vegetatie_ndvi_or_exg():
+def test_vegetatie_ndvi_first_exg_without_cir():
     zomer = _kleur(_beeld(GRIJS, 2), (0, slice(None)), GROEN)  # rij 0 groen in RGB
     cir = _kleur(_beeld(CIR_GRIJS, 2), (slice(None), 0), CIR_GROEN)  # kolom 0 groen in CIR
-    assert vegetatie(zomer, cir, CFG).tolist() == [[True, True], [True, False]]
+    assert vegetatie(zomer, cir, CFG).tolist() == [[True, False], [True, False]]
     assert vegetatie(zomer, None, CFG).tolist() == [[True, True], [False, False]]
 
 
@@ -328,3 +328,43 @@ def test_signals_on_miniwijk(miniwijk):
     assert p2["S5_toename"] == pytest.approx(0.0)  # blok vervangt verharding: beide niet groen
     assert r1["S5_toename"] < 0  # groenvlak groeit
     assert rd_box((22, 22, 24, 24)).within(tuin("V", "achter"))
+
+
+def _cfg_lagen(**drempels):
+    """CFG met per-laag drempels, bijv. cir_nu={'ndvi_drempel': 0.3}."""
+    lagen = {k: {**v, **drempels.get(k, {})} for k, v in CFG.luchtfoto.lagen.items()}
+    return dataclasses.replace(CFG, luchtfoto=dataclasses.replace(CFG.luchtfoto, lagen=lagen))
+
+
+def test_ndvi_decides_where_cir_valid():
+    zomer = _beeld(GROEN, 2)  # RGB overal groen ...
+    cir = _kleur(_beeld(CIR_GRIJS, 2), (0, 0), CIR_GROEN)  # ... CIR alleen linksboven
+    assert vegetatie(zomer, cir, CFG).tolist() == [[True, False], [False, False]]
+
+
+def test_exg_fallback_uses_higher_threshold():
+    assert CFG.signalen.exg_drempel == pytest.approx(0.12)
+    zwak = (100, 125, 100)  # ExG = 50 / 325 = 0,15
+    nauwelijks = (110, 122, 110)  # ExG = 24 / 342 = 0,07: onder 0,12
+    zomer = _kleur(_kleur(_beeld(GRIJS, 2), (0, 0), zwak), (0, 1), nauwelijks)
+    assert vegetatie(zomer, None, CFG).tolist() == [[True, False], [False, False]]
+
+
+def test_vegetatie_per_layer_thresholds():
+    cir = _beeld((150, 90, 100), 2)  # NDVI = 0,25
+    zomer = _beeld(GRIJS, 2)
+    cfg = _cfg_lagen(cir_nu={"ndvi_drempel": 0.3}, cir_vorig={"ndvi_drempel": 0.2})
+    assert not vegetatie(zomer, cir, cfg, jaar="nu").any()
+    assert vegetatie(zomer, cir, cfg, jaar="vorig").all()
+    cfg = _cfg_lagen(zomer_vorig={"exg_drempel": 0.7})  # GROEN heeft ExG 0,68
+    assert not vegetatie(_beeld(GROEN, 2), None, cfg, jaar="vorig").any()
+    assert vegetatie(_beeld(GROEN, 2), None, cfg, jaar="nu").all()
+
+
+def test_s1_compares_each_year_with_its_own_threshold():
+    # zelfde NDVI (0,25) in beide jaren; vorig jaar is de beeldschaal lager -> lagere drempel
+    cir = _beeld((150, 90, 100))
+    tr = _tr(zomer_vorig=_beeld(GRIJS), cir_nu=cir, cir_vorig=cir.copy())
+    cfg = _cfg_lagen(cir_nu={"ndvi_drempel": 0.3}, cir_vorig={"ndvi_drempel": 0.2})
+    assert s1_groentoename(tr, cfg) == pytest.approx(-1.0)
+    assert s1_groentoename(tr, CFG) == pytest.approx(0.0)

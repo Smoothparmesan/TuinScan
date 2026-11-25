@@ -11,6 +11,7 @@ from tuinscan.mappen import Mappen, OneDriveFout, controleer_buiten_onedrive
 STAPPEN = {
     "inspecteer": "Stel kolomkoppeling voor uit de Tobias-export",
     "download": "Download PDOK-data voor het werkgebied",
+    "kalibreer": "Toon ExG/NDVI op wegen, daken en groen en stel drempels per laag voor",
     "tuinen": "Bepaal de tuinvlakken",
     "score": "Bereken signalen en score",
     "rapport": "Maak het HTML-rapport",
@@ -121,6 +122,16 @@ def main(argv: list[str] | None = None) -> int:
             f"download: opgehaald {len(r.opgehaald)}, overgeslagen {len(r.overgeslagen)}, "
             f"niet geconfigureerd {r.niet_geconfigureerd}, leeg {r.leeg}, mislukt {r.mislukt}"
         )
+        return 0
+    if args.stap == "kalibreer":
+        from tuinscan.kalibreer import kalibreer
+        from tuinscan.stappen import StapFout
+
+        try:
+            kalibreer(cfg, mappen)
+        except (ConfigFout, StapFout) as e:
+            print(f"Fout: {e}", file=sys.stderr)
+            return 1
         return 0
     if args.stap == "tuinen":
         from tuinscan.stappen import StapFout, stap_tuinen

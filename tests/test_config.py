@@ -87,3 +87,49 @@ def test_ahn_vorige_requires_indexes(tmp_path):
     with pytest.raises(ConfigFout) as e:
         laad_config(pad)
     assert "ahn.vorige" in str(e.value)
+
+
+def test_per_layer_thresholds_optional_with_fallback(tmp_path):
+    from tuinscan.config import laag_drempel
+
+    basis = laad_config(EXAMPLE)
+    assert laag_drempel(basis, "cir_nu", "ndvi_drempel") == basis.signalen.ndvi_drempel
+    assert laag_drempel(basis, "zomer_vorig", "exg_drempel") == basis.signalen.exg_drempel
+
+    def w(d):
+        d["luchtfoto"]["lagen"]["cir_nu"]["ndvi_drempel"] = 0.3
+        d["luchtfoto"]["lagen"]["zomer_vorig"]["exg_drempel"] = 0.1
+
+    cfg = laad_config(_schrijf(tmp_path, w))
+    assert laag_drempel(cfg, "cir_nu", "ndvi_drempel") == 0.3
+    assert laag_drempel(cfg, "cir_vorig", "ndvi_drempel") == cfg.signalen.ndvi_drempel
+    assert laag_drempel(cfg, "zomer_vorig", "exg_drempel") == 0.1
+
+
+@pytest.mark.parametrize(
+    "laag, naam, waarde",
+    [
+        ("zomer_nu", "ndvi_drempel", 0.3),  # NDVI hoort bij de CIR-laag
+        ("cir_vorig", "exg_drempel", 0.1),  # ExG hoort bij de RGB-zomerlaag
+        ("winter_nu", "exg_drempel", 0.1),  # winter telt niet mee in het masker
+        ("cir_nu", "ndvi_drempel", "0.3"),
+    ],
+)
+def test_per_layer_threshold_placement_and_type(tmp_path, laag, naam, waarde):
+    pad = _schrijf(tmp_path, lambda d: d["luchtfoto"]["lagen"][laag].update({naam: waarde}))
+    with pytest.raises(ConfigFout) as e:
+        laad_config(pad)
+    assert f"luchtfoto.lagen.{laag}.{naam}" in str(e.value)
+
+
+def test_hash_includes_per_layer_thresholds(tmp_path):
+    basis = parameterset_hash(laad_config(EXAMPLE))
+    pad = _schrijf(tmp_path, lambda d: d["luchtfoto"]["lagen"]["cir_vorig"].update(
+        ndvi_drempel=0.12))  # fmt: skip
+    assert parameterset_hash(laad_config(pad)) != basis
+    pad = _schrijf(tmp_path, lambda d: d["luchtfoto"]["lagen"]["zomer_nu"].update(laag="x"))
+    assert parameterset_hash(laad_config(pad)) == basis  # laagnaam is herkomst, geen parameter
+
+
+def test_rijbaan_functies_in_config():
+    assert "rijbaan lokale weg" in laad_config(EXAMPLE).pdok.rijbaan_functies

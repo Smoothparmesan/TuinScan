@@ -1,10 +1,12 @@
 """Signalen S1, S2, S3, S4a en S5 per tuin(deel) uit luchtfoto's en AHN.
 
 Begroeiing = zomer-NDVI (CIR van hetzelfde jaar, band 1 = NIR, band 2 = rood) boven
-`ndvi_drempel` OF zomer-ExG boven `exg_drempel`. "Geldig" = in de tuin (of zone),
-ongemaskeerd in elke gebruikte invoer en geen schaduw. Aandelen gaan over geldige
-pixels (geen geldige pixel -> None); oppervlakken (S3, S4a) tellen alleen geldige pixels.
-Alle drempels komen uit `cfg.signalen`.
+`ndvi_drempel` overal waar CIR geldig is; alleen waar CIR ontbreekt beslist zomer-ExG boven
+`exg_drempel`. Beide drempels kunnen per luchtfotolaag verschillen (`luchtfoto.lagen.<laag>`,
+zie `tuinscan kalibreer`), zodat elk jaar met zijn eigen beeldschaal wordt vergeleken.
+"Geldig" = in de tuin (of zone), ongemaskeerd in elke gebruikte invoer en geen schaduw.
+Aandelen gaan over geldige pixels (geen geldige pixel -> None); oppervlakken (S3, S4a)
+tellen alleen geldige pixels. Alle drempels komen uit `cfg.signalen` (en `luchtfoto.lagen`).
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import numpy as np
 from affine import Affine
 from rasterio.features import rasterize, shapes
 
-from tuinscan.config import Config
+from tuinscan.config import Config, laag_drempel
 from tuinscan.rasters import Raster, TuinRasters
 
 log = logging.getLogger(__name__)
@@ -51,17 +53,16 @@ def schaduw(rgb, helderheid: float) -> np.ndarray:
     return _data(rgb)[:3].mean(axis=0) < helderheid
 
 
-def vegetatie(zomer, cir, cfg: Config) -> np.ndarray:
-    """Begroeiing: NDVI(cir) > ndvi_drempel OF ExG(zomer) > exg_drempel.
+def vegetatie(zomer, cir, cfg: Config, jaar: str = "nu") -> np.ndarray:
+    """Begroeiing: NDVI(cir) > ndvi_drempel waar `cir` geldig is, anders ExG(zomer) > exg_drempel.
 
-    Het NDVI-deel vervalt als `cir` None is, en per pixel waar `cir` gemaskeerd is
-    (daar alleen ExG).
+    `jaar` ("nu" of "vorig") kiest de drempels van de lagen cir_<jaar> en zomer_<jaar>.
     """
-    s = cfg.signalen
-    veg = exg(zomer) > s.exg_drempel
+    veg = exg(zomer) > laag_drempel(cfg, f"zomer_{jaar}", "exg_drempel")
     if cir is not None:
         cir_ok = ~np.ma.getmaskarray(cir).any(axis=0)
-        veg |= cir_ok & (ndvi_cir(cir) > s.ndvi_drempel)
+        ndvi_veg = ndvi_cir(cir) > laag_drempel(cfg, f"cir_{jaar}", "ndvi_drempel")
+        veg = np.where(cir_ok, ndvi_veg, veg)
     return veg
 
 
@@ -100,7 +101,8 @@ def _twee_jaar(tr: TuinRasters, cfg: Config):
         & ~schaduw(tr.zomer_nu, h)
         & ~schaduw(tr.zomer_vorig, h)
     )
-    return geldig, vegetatie(tr.zomer_nu, cir_nu, cfg), vegetatie(tr.zomer_vorig, cir_vorig, cfg)
+    return (geldig, vegetatie(tr.zomer_nu, cir_nu, cfg, "nu"),
+            vegetatie(tr.zomer_vorig, cir_vorig, cfg, "vorig"))  # fmt: skip
 
 
 def _nu_met_hoogte(tr: TuinRasters, cfg: Config):
