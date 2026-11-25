@@ -27,6 +27,9 @@ def _parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--ronde", default=None, metavar="NAAM", help="rondenaam (standaard gebied.naam)"
         )
+        if naam == "download":
+            sp.add_argument("--vernieuw", action="store_true", help="haal alles opnieuw op")
+            sp.add_argument("--lijst-lagen", action="store_true", help="toon WMTS-lagen en stop")
     return p
 
 
@@ -47,6 +50,18 @@ def main(argv: list[str] | None = None) -> int:
         from tuinscan.inspecteer import inspecteer
 
         return inspecteer(cfg, mappen)
+    if args.stap == "download":
+        from tuinscan.download import druk_lagen_af, voer_download_uit
+
+        if args.lijst_lagen:
+            druk_lagen_af(cfg)
+            return 0
+        r = voer_download_uit(cfg, mappen, args.vernieuw)
+        print(
+            f"download: opgehaald {len(r.opgehaald)}, overgeslagen {len(r.overgeslagen)}, "
+            f"niet geconfigureerd {r.niet_geconfigureerd}, leeg {r.leeg}"
+        )
+        return 0
     print(f"Stap '{args.stap}': nog niet beschikbaar")
     return 2
 
