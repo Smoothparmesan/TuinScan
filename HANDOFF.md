@@ -2,7 +2,7 @@
 
 ## Status (2026-11-25)
 - PoC code klaar (plan-taken 1–15 + eindreview-fixes + "best of both"-patch). `uv run pytest -q`: 348 passed; `uv run ruff check .` schoon. Branch `claude/inspiring-bardeen-sbgqro`.
-- Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`. PDOK-feiten + kalibratie: `docs/pdok-bronnen.md`. Gebruik: `README.md`.
+- Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`. PDOK-feiten + kalibratie: `docs/pdok-bronnen.md`. Gebruik: `README.md` (volledig, NL) en `docs/MANUAL.md` (korte handleiding, EN).
 - Spec (Claude Docs "Specsheet Tuinscan") bijgewerkt met de gemeten PDOK-feiten (zomer-CIR bestaat).
 
 ## Draaien
