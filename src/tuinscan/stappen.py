@@ -22,9 +22,9 @@ from tuinscan.koppeling import href_ids, koppel, koppelpercentage
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.cache import vector_pad
 from tuinscan.rapport import render_rapport
-from tuinscan.rasters import bouw_tuinrasters, bronnen_uit_cache, overhang_zone
+from tuinscan.rasters import bouw_tuinrasters, bronnen_uit_cache, open_bronnen, overhang_zone
 from tuinscan.score import aggregeer_delen, bereken_score
-from tuinscan.signalen import bereken_signalen
+from tuinscan.signalen import bereken_signalen, s4a_regios
 from tuinscan.tuinvlak import STAP, maak_geldig, maak_tuinen, pas_correcties_toe
 from tuinscan.uitsneden import maak_uitsneden
 
@@ -114,7 +114,9 @@ def stap_tuinen(cfg: Config, mappen: Mappen) -> TuinenRapport:
             fouten.voeg_toe(vhe, STAP, f"geen tuinvlak voor deel {', '.join(cfg.tuin.delen)}")
 
     # Y = alle VHE's uit de export (na filters), ook die al bij het inlezen afvielen.
-    tobias_fout = {r[0] for r in fouten.regels if r[1] == tobias.STAP}
+    tobias_fout = {
+        r[0] for r in fouten.regels if r[1] == tobias.STAP and r[0] != tobias.ALGEMENE_VHE
+    }
     n_vhe = len(set(vhes["vhe_nummer"].astype(str)) | tobias_fout)
     n_tuin = len(met_tuin)
     pct = koppelpercentage(n_vhe, n_tuin)
@@ -165,8 +167,25 @@ def _bijgebouw_op_perceel(percelen, panden, woon_ids: set[str]) -> dict[str, boo
     bij = panden[~panden["feature_id"].astype(str).isin(woon_ids)]
     uit: dict[str, bool] = {}
     for perceel_id, geom in zip(percelen.index, percelen.geometry, strict=True):
-        uit[perceel_id] = bool(len(bij) and bij.sindex.query(geom, predicate="intersects").size)
+        heeft = bool(len(bij) and bij.sindex.query(geom, predicate="intersects").size)
+        uit[perceel_id] = uit.get(perceel_id, False) or heeft
     return uit
+
+
+def _kies_berging_deel(rijen_delen, rasters_per_deel, cfg: Config) -> int:
+    """Index van het tuindeel waarin de standaardberging wordt afgetrokken (-1 = geen)."""
+    if len(rijen_delen) == 1:
+        return 0
+    max_m2 = cfg.signalen.s4a_standaardberging_max_m2
+    kandidaten = []
+    for idx, (r, tr) in enumerate(zip(rijen_delen, rasters_per_deel, strict=True)):
+        regios = s4a_regios(tr, cfg)
+        if not regios:
+            continue
+        passend = [t for t, _ in regios if t <= max_m2]
+        if passend:
+            kandidaten.append((max(passend), 1 if r.deel == "achter" else 0, idx))
+    return max(kandidaten)[2] if kandidaten else -1
 
 
 def _list_naar_tekst(w) -> str:
@@ -192,24 +211,26 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
     bestaand = lees_foutenlijst(fout_pad)
     fouten.regels = [tuple(r) for r in bestaand.itertuples(index=False) if r[1] != SCORE_STAP]
 
-    try:
-        gekoppeld = koppel(vhes, vbo, panden, percelen, velden, Foutenlijst())
-        perceel_van = dict(
-            zip(gekoppeld["vhe_nummer"].astype(str), gekoppeld["perceel_id"], strict=True)
-        )
-    except Exception as e:  # zonder perceel geldt alleen: geen berging negeren
-        log.exception("koppeling voor bergingscontrole mislukt")
-        fouten.voeg_toe(
-            "alle", SCORE_STAP, f"bergingscontrole overgeslagen: koppeling mislukt: {e}"
-        )
-        perceel_van = {}
-    percelen_idx = percelen.set_index(percelen[velden["perceel_id"]].astype(str))
-    bijgebouw = _bijgebouw_op_perceel(percelen_idx, panden, _woon_pand_ids(vbo, velden))
     berging = (
         dict(zip(vhes["vhe_nummer"].astype(str), vhes["standaardberging"].map(_waar), strict=True))
         if "standaardberging" in vhes.columns
         else {}
     )
+    perceel_van: dict[str, str] = {}
+    bijgebouw: dict[str, bool] = {}
+    if any(berging.values()):
+        try:
+            gekoppeld = koppel(vhes, vbo, panden, percelen, velden, Foutenlijst())
+            perceel_van = dict(
+                zip(gekoppeld["vhe_nummer"].astype(str), gekoppeld["perceel_id"], strict=True)
+            )
+            percelen_idx = percelen.set_index(percelen[velden["perceel_id"]].astype(str))
+            bijgebouw = _bijgebouw_op_perceel(percelen_idx, panden, _woon_pand_ids(vbo, velden))
+        except Exception as e:  # zonder perceel geldt alleen: geen berging negeren
+            log.exception("koppeling voor bergingscontrole mislukt")
+            fouten.voeg_toe(
+                "alle", SCORE_STAP, f"bergingscontrole overgeslagen: koppeling mislukt: {e}"
+            )
 
     bronnen = bronnen_uit_cache(mappen)
     herkomst = herkomst_uit_cache(cfg, mappen)
@@ -222,37 +243,51 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
 
     deel_rijen, vhe_rijen, scores_geom = [], [], []
     tuinen["vhe_nummer"] = tuinen["vhe_nummer"].astype(str)
-    for vhe, delen in tuinen.groupby("vhe_nummer", sort=True):
-        try:
-            negeer = berging.get(vhe, False) and not bijgebouw.get(perceel_van.get(vhe), True)
-            per_deel = []
-            for r in delen.itertuples():
-                zone = overhang_zone(r.geometry, panden, voetpad, groen, s.s3_buffer_m)
-                tr = bouw_tuinrasters(r.geometry, zone, bronnen, s.resolutie_m, panden)
-                sig = bereken_signalen(tr, cfg, negeer)
-                per_deel.append((float(r.oppervlak_m2), sig))
-                deel_rijen.append({"vhe_nummer": vhe, "deel": r.deel,
-                                   "oppervlak_m2": r.oppervlak_m2, **sig})  # fmt: skip
-            agg = aggregeer_delen(per_deel)
-            uitkomst = bereken_score(agg, cfg)
-        except Exception as e:  # één VHE stopt de stap nooit (N06)
-            log.exception("score VHE %s mislukt", vhe)
-            fouten.voeg_toe(vhe, SCORE_STAP, f"score mislukt: {e}")
-            continue
-        eerste = delen.iloc[0]
-        reden = uitkomst.redenen + [None] * 2
-        vhe_rijen.append({
-            "vhe_nummer": vhe, "adres": eerste["adres"], "wijk": eerste["wijk"],
-            "complex": eerste["complex"], "score": uitkomst.score,
-            **{k: agg.get(k) for k in SIGNAAL_KOLOMMEN},
-            **{f"bijdrage_{k}": b for k, b in uitkomst.bijdragen.items()},
-            "reden_1": reden[0], "reden_2": reden[1],
-            "reden_codes": uitkomst.reden_codes, "ontbrekend": uitkomst.ontbrekend,
-            **{k: herkomst[k] for k in ("zomer_jaar", "zomer_vorig_jaar", "winter_jaar",
-                                        "ahn_versie")},
-            "parameterset": parameterset_hash(cfg),
-        })  # fmt: skip
-        scores_geom.append(delen.geometry.union_all())
+    with open_bronnen(bronnen, vul_dtm=True) as open_rasters:
+        for vhe, delen in tuinen.groupby("vhe_nummer", sort=True):
+            try:
+                negeer = berging.get(vhe, False) and not bijgebouw.get(perceel_van.get(vhe), True)
+                rijen_delen = list(delen.itertuples())
+                rasters_per_deel = [
+                    bouw_tuinrasters(
+                        r.geometry,
+                        overhang_zone(r.geometry, panden, voetpad, groen, s.s3_buffer_m),
+                        open_rasters,
+                        s.resolutie_m,
+                        panden,
+                    )
+                    for r in rijen_delen
+                ]
+                # hooguit één standaardberging per VHE aftrekken (niet zowel voor als achter)
+                berging_idx = (
+                    _kies_berging_deel(rijen_delen, rasters_per_deel, cfg) if negeer else -1
+                )
+                per_deel = []
+                for idx, (r, tr) in enumerate(zip(rijen_delen, rasters_per_deel, strict=True)):
+                    sig = bereken_signalen(tr, cfg, idx == berging_idx)
+                    per_deel.append((float(r.oppervlak_m2), sig))
+                    deel_rijen.append({"vhe_nummer": vhe, "deel": r.deel,
+                                       "oppervlak_m2": r.oppervlak_m2, **sig})  # fmt: skip
+                agg = aggregeer_delen(per_deel)
+                uitkomst = bereken_score(agg, cfg)
+            except Exception as e:  # één VHE stopt de stap nooit (N06)
+                log.exception("score VHE %s mislukt", vhe)
+                fouten.voeg_toe(vhe, SCORE_STAP, f"score mislukt: {e}")
+                continue
+            eerste = delen.iloc[0]
+            reden = uitkomst.redenen + [None] * 2
+            vhe_rijen.append({
+                "vhe_nummer": vhe, "adres": eerste["adres"], "wijk": eerste["wijk"],
+                "complex": eerste["complex"], "score": uitkomst.score,
+                **{k: agg.get(k) for k in SIGNAAL_KOLOMMEN},
+                **{f"bijdrage_{k}": b for k, b in uitkomst.bijdragen.items()},
+                "reden_1": reden[0], "reden_2": reden[1],
+                "reden_codes": uitkomst.reden_codes, "ontbrekend": uitkomst.ontbrekend,
+                **{k: herkomst[k] for k in ("zomer_jaar", "zomer_vorig_jaar", "winter_jaar",
+                                            "ahn_versie")},
+                "parameterset": parameterset_hash(cfg),
+            })  # fmt: skip
+            scores_geom.append(delen.geometry.union_all())
 
     kol_deel = ["vhe_nummer", "deel", "oppervlak_m2", *SIGNAAL_KOLOMMEN]
     per_deel_df = pd.DataFrame(deel_rijen, columns=kol_deel)
@@ -305,14 +340,26 @@ def stap_rapport(cfg: Config, mappen: Mappen) -> Path:
     fout_pad = rd / "foutenlijst.csv"
     fouten = lees_foutenlijst(fout_pad)
     uitsneden = {}
+    actueel: set[Path] = set()
     if len(scores):
         bronnen = bronnen_uit_cache(mappen)
         geom = tuinen.groupby("vhe_nummer").geometry.agg(lambda g: g.union_all())
-        for vhe in scores["vhe_nummer"].astype(str):
-            try:
-                uitsneden[vhe] = maak_uitsneden(vhe, geom[vhe], bronnen, rd)
-            except Exception:  # geen beeld is geen reden om het rapport te laten falen (N06)
-                log.exception("uitsneden VHE %s mislukt", vhe)
+        with open_bronnen(bronnen, vul_dtm=False) as open_rasters:
+            for vhe in scores["vhe_nummer"].astype(str):
+                try:
+                    gemaakt = maak_uitsneden(vhe, geom[vhe], open_rasters, rd)
+                    uitsneden[vhe] = gemaakt
+                    actueel.update(p.resolve() for p in gemaakt.values() if p is not None)
+                except Exception:  # geen beeld is geen reden om het rapport te laten falen (N06)
+                    log.exception("uitsneden VHE %s mislukt", vhe)
+    uitsnede_dir = rd / "uitsneden"
+    if uitsnede_dir.is_dir():
+        for oud in uitsnede_dir.glob("*.jpg"):
+            if oud.resolve() not in actueel:
+                try:
+                    oud.unlink(missing_ok=True)
+                except OSError as e:  # Windows: bestand open in een viewer
+                    log.warning("oude uitsnede niet verwijderd (%s): %s", oud.name, e)
     try:
         bladen = json.loads((rd / "ronde.json").read_text(encoding="utf-8"))["herkomst"][
             "ahn_kaartbladen"

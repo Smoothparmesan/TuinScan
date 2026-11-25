@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import math
+import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,9 @@ import rasterio
 import requests
 from PIL import Image
 from rasterio.transform import from_origin
+from rasterio.windows import Window
+
+from tuinscan.bestanden import schrijf_atomair
 
 NS = {
     "w": "http://www.opengis.net/wmts/1.0",
@@ -67,9 +71,10 @@ def lees_capabilities(xml: bytes, matrixset: str) -> Capabilities:
         sets = {e.text for e in laag.iterfind("w:TileMatrixSetLink/w:TileMatrixSet", NS)}
         if matrixset not in sets:
             continue
-        lagen[laag.findtext("ows:Identifier", namespaces=NS)] = (
-            laag.findtext("w:Format", namespaces=NS) or "image/jpeg"
-        )
+        laag_id = laag.findtext("ows:Identifier", namespaces=NS)
+        if not laag_id:
+            continue
+        lagen[laag_id] = laag.findtext("w:Format", namespaces=NS) or "image/jpeg"
     matrices: dict[str, TileMatrix] = {}
     for tms in root.iterfind("w:Contents/w:TileMatrixSet", NS):
         if tms.findtext("ows:Identifier", namespaces=NS) != matrixset:
@@ -127,7 +132,7 @@ def _is_leeg(arr: np.ndarray) -> bool:
 
 def _haal_tegel(sessie, url, laag, matrixset, m, col, row, ext="jpeg") -> np.ndarray | None:
     """(3,h,w) uint8, of None als de tegel mislukt of leeg (wit/zwart) is."""
-    tegel_url = f"{url}/{laag}/{matrixset}/{m.id}/{col}/{row}.{ext}"
+    tegel_url = f"{url.rstrip('/')}/{laag}/{matrixset}/{m.id}/{col}/{row}.{ext}"
     reden = ""
     for poging in range(RETRIES + 1):
         try:
@@ -177,35 +182,67 @@ def download_mozaiek(
     c1 = max(c for c, _ in tegels)
     r1 = max(r for _, r in tegels)
     tb, th = matrix.tegel_b, matrix.tegel_h
-    data = np.zeros((3, (r1 - r0 + 1) * th, (c1 - c0 + 1) * tb), dtype=np.uint8)
-    mask = np.zeros(data.shape[1:], dtype=np.uint8)
-
-    def werk(cr: tuple[int, int]):
-        return cr, _haal_tegel(sessie, url, laag, matrixset, matrix, *cr, ext)
-
-    mislukt = 0
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for (c, r), arr in pool.map(werk, tegels):
-            if arr is None or arr.shape != (3, th, tb):
-                mislukt += 1
-                continue
-            y, x = (r - r0) * th, (c - c0) * tb
-            data[:, y : y + th, x : x + tb] = arr
-            mask[y : y + th, x : x + tb] = 255
-
+    breedte, hoogte = (c1 - c0 + 1) * tb, (r1 - r0 + 1) * th
     transform = from_origin(
         matrix.origin_x + c0 * tb * matrix.resolutie,
         matrix.origin_y - r0 * th * matrix.resolutie,
         matrix.resolutie,
         matrix.resolutie,
     )
-    doel.parent.mkdir(parents=True, exist_ok=True)
-    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-        with rasterio.open(
-            doel, "w", driver="GTiff", width=data.shape[2], height=data.shape[1], count=3,
-            dtype="uint8", crs="EPSG:28992", transform=transform, nodata=0,
-            tiled=True, blockxsize=256, blockysize=256, compress="deflate",
-        ) as dst:
-            dst.write(data)
-            dst.write_mask(mask)
+
+    # requests.Session is niet thread-safe: geef elke worker een eigen gekloonde sessie
+    lokaal = threading.local()
+    gemaakte_sessies: list[requests.Session] = []
+    slot = threading.Lock()
+    echte_sessie = type(sessie) is requests.Session
+
+    def _kloon_sessie() -> requests.Session:
+        s = requests.Session()
+        s.headers.update(sessie.headers)
+        s.proxies.update(sessie.proxies)
+        s.verify = sessie.verify
+        s.cert = sessie.cert
+        s.auth = sessie.auth
+        s.trust_env = sessie.trust_env
+        return s
+
+    def worker_sessie():
+        if not echte_sessie:
+            return sessie
+        s = getattr(lokaal, "sessie", None)
+        if s is None:
+            s = _kloon_sessie()
+            lokaal.sessie = s
+            with slot:
+                gemaakte_sessies.append(s)
+        return s
+
+    def werk(cr: tuple[int, int]):
+        return cr, _haal_tegel(worker_sessie(), url, laag, matrixset, matrix, *cr, ext)
+
+    leeg_data = np.zeros((3, th, tb), dtype=np.uint8)
+    leeg_mask = np.zeros((th, tb), dtype=np.uint8)
+    vol_mask = np.full((th, tb), 255, dtype=np.uint8)
+    mislukt = 0
+    try:
+        with schrijf_atomair(doel) as tmp:
+            with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+                with rasterio.open(
+                    tmp, "w", driver="GTiff", width=breedte, height=hoogte, count=3,
+                    dtype="uint8", crs="EPSG:28992", transform=transform, nodata=0,
+                    tiled=True, blockxsize=256, blockysize=256, compress="deflate",
+                ) as dst:
+                    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                        for (c, r), arr in pool.map(werk, tegels):
+                            venster = Window((c - c0) * tb, (r - r0) * th, tb, th)
+                            if arr is None or arr.shape != (3, th, tb):
+                                mislukt += 1
+                                dst.write(leeg_data, window=venster)
+                                dst.write_mask(leeg_mask, window=venster)
+                            else:
+                                dst.write(arr, window=venster)
+                                dst.write_mask(vol_mask, window=venster)
+    finally:
+        for s in gemaakte_sessies:
+            s.close()
     return MozaiekInfo(doel, len(tegels), mislukt)

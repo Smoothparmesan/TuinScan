@@ -190,17 +190,24 @@ def _voer_uit(args, cfg, mappen) -> int:
 
         return inspecteer(cfg, mappen)
     if args.stap == "download":
+        import requests
+
         from tuinscan.download import druk_lagen_af, voer_download_uit
 
-        if args.lijst_lagen:
-            druk_lagen_af(cfg)
-            return 0
-        r = voer_download_uit(cfg, mappen, args.vernieuw)
+        try:
+            if args.lijst_lagen:
+                druk_lagen_af(cfg)
+                return 0
+            r = voer_download_uit(cfg, mappen, args.vernieuw)
+        except (requests.RequestException, OSError) as e:
+            log.exception("download mislukt")
+            print(f"Fout: {e}", file=sys.stderr)
+            return 1
         print(
             f"download: opgehaald {len(r.opgehaald)}, overgeslagen {len(r.overgeslagen)}, "
             f"niet geconfigureerd {r.niet_geconfigureerd}, leeg {r.leeg}, mislukt {r.mislukt}"
         )
-        return 0
+        return 1 if r.mislukt else 0
     if args.stap == "kalibreer":
         from tuinscan.kalibreer import kalibreer
         from tuinscan.stappen import StapFout

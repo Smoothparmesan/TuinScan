@@ -9,6 +9,8 @@ GeoTIFF-mask) of buiten de bron.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +41,40 @@ VENSTER_MARGE_M = 1.0
 DTM_ZOEKAFSTAND_PX = 40  # AHN-pixels; DTM heeft grote gaten onder gebouwen
 _RAND_PX = 2  # extra bronpixels rond het venster voor bilineaire interpolatie
 _EPS = 1e-6
+_MAX_DTM_CACHE_PX = 25_000_000  # tot ~100 MB float32: DTM eenmalig in geheugen vullen
+_DTM_SLEUTELS = ("ahn_dtm", "ahn_vorig_dtm")
+
+
+@dataclass(frozen=True)
+class _GevuldRaster:
+    data: np.ndarray  # float32 (banden, h, w), NaN = ongeldig
+    transform: Affine
+    crs: CRS | None
+
+
+@contextmanager
+def open_bronnen(
+    bronnen: dict[str, Path | None], *, vul_dtm: bool = False
+) -> Iterator[dict[str, object]]:
+    """Open beschikbare GeoTIFFs eenmalig voor een hele stap (sneller en Windows-veilig).
+
+    Met `vul_dtm=True` worden gaten in DTM-lagen die in het geheugen passen (<= 25M px)
+    één keer voor de hele wijk gevuld in plaats van per tuin opnieuw.
+    """
+    geopend: dict[str, object] = {}
+    with ExitStack() as stack:
+        for sleutel, pad in bronnen.items():
+            if pad is None or not Path(pad).exists():
+                geopend[sleutel] = None
+                continue
+            src = stack.enter_context(rasterio.open(pad))
+            if vul_dtm and sleutel in _DTM_SLEUTELS and src.width * src.height <= _MAX_DTM_CACHE_PX:
+                data = src.read().astype(np.float32)
+                data[src.read_masks() == 0] = np.nan
+                geopend[sleutel] = _GevuldRaster(_vul_gaten(data), src.transform, src.crs)
+            else:
+                geopend[sleutel] = src
+        yield geopend
 
 
 def bronnen_uit_cache(mappen: Mappen) -> dict[str, Path | None]:
@@ -100,21 +136,49 @@ def _leeg(banden: int, vorm) -> Raster:
     return np.ma.masked_all((banden, *vorm), dtype=np.float32)
 
 
-def _venster(pad: Path | None, transform, vorm, resampling, dtm_vullen: bool = False):
-    if pad is None or not Path(pad).exists():
+def _lees_gevuld(bron: _GevuldRaster, bounds, rand_px: int):
+    if bron.crs is not None and CRS.from_user_input(bron.crs) != CRS_RD:
+        bounds = transform_bounds(CRS_RD, bron.crs, *bounds)
+    w = from_bounds(*bounds, transform=bron.transform)
+    h_src, b_src = bron.data.shape[1:]
+    c0 = max(0, math.floor(w.col_off) - rand_px)
+    r0 = max(0, math.floor(w.row_off) - rand_px)
+    c1 = min(b_src, math.ceil(w.col_off + w.width) + rand_px)
+    r1 = min(h_src, math.ceil(w.row_off + w.height) + rand_px)
+    if c1 <= c0 or r1 <= r0:
+        return None
+    return bron.data[:, r0:r1, c0:c1], bron.transform @ Affine.translation(c0, r0)
+
+
+def _venster_uit_src(src, bounds, transform, vorm, resampling, dtm_vullen: bool) -> Raster:
+    rand = _RAND_PX + (DTM_ZOEKAFSTAND_PX if dtm_vullen else 0)
+    gelezen = _lees_bron(src, bounds, rand)
+    if gelezen is None:
+        return _leeg(src.count, vorm)
+    data, src_transform = gelezen
+    if dtm_vullen:
+        data = _vul_gaten(data)
+    return _naar_grid(data, src_transform, src.crs, transform, vorm, resampling)
+
+
+def _venster(bron, transform, vorm, resampling, dtm_vullen: bool = False):
+    if bron is None:
         return None
     h, b = vorm
     bounds = (transform.c, transform.f + transform.e * h, transform.c + transform.a * b,
               transform.f)  # fmt: skip
-    with rasterio.open(pad) as src:
-        rand = _RAND_PX + (DTM_ZOEKAFSTAND_PX if dtm_vullen else 0)
-        gelezen = _lees_bron(src, bounds, rand)
+    if isinstance(bron, _GevuldRaster):
+        gelezen = _lees_gevuld(bron, bounds, _RAND_PX)
         if gelezen is None:
-            return _leeg(src.count, vorm)
+            return _leeg(bron.data.shape[0], vorm)
         data, src_transform = gelezen
-        if dtm_vullen:
-            data = _vul_gaten(data)
-        return _naar_grid(data, src_transform, src.crs, transform, vorm, resampling)
+        return _naar_grid(data, src_transform, bron.crs, transform, vorm, resampling)
+    if isinstance(bron, (str, Path)):
+        if not Path(bron).exists():
+            return None
+        with rasterio.open(bron) as src:
+            return _venster_uit_src(src, bounds, transform, vorm, resampling, dtm_vullen)
+    return _venster_uit_src(bron, bounds, transform, vorm, resampling, dtm_vullen)
 
 
 def _vul_gaten(data: np.ndarray) -> np.ndarray:

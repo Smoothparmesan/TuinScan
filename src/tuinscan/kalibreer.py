@@ -13,6 +13,7 @@ dak) en p25 van BGT-groen. De score-schaal verandert niet; alleen het masker.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -22,7 +23,7 @@ from rasterio.features import rasterize
 
 from tuinscan.config import Config, laag_drempel
 from tuinscan.mappen import Mappen
-from tuinscan.rasters import _venster, bronnen_uit_cache, grid
+from tuinscan.rasters import _venster, bronnen_uit_cache, grid, open_bronnen
 from tuinscan.signalen import exg, ndvi_cir, schaduw, vegetatie
 from tuinscan.stappen import _lees_cache
 
@@ -105,11 +106,21 @@ def _percentielen(hist: np.ndarray) -> dict[int, float]:
     return {q: float(np.searchsorted(cum, q / 100 * n) * _STAP - 1.0) for q in PERCENTIELEN}
 
 
-def _tegels(bbox):
-    x0, y0, x1, y1 = bbox
-    for x in np.arange(x0, x1, TEGEL_M):
-        for y in np.arange(y0, y1, TEGEL_M):
-            yield (x, y, min(x + TEGEL_M, x1), min(y + TEGEL_M, y1))
+def _tegels(bbox, res: float):
+    """Niet-overlappende tegels op het pixelraster (`res`), zonder dubbele randpixels."""
+    x0, y0, x1, y1 = (float(v) for v in bbox)
+    x0, y0 = math.floor(x0 / res) * res, math.floor(y0 / res) * res
+    x1, y1 = math.ceil(x1 / res) * res, math.ceil(y1 / res) * res
+    stap = max(res, round(TEGEL_M / res) * res)
+    x = x0
+    while x < x1 - 1e-9:
+        nx = min(x + stap, x1)
+        y = y0
+        while y < y1 - 1e-9:
+            ny = min(y + stap, y1)
+            yield (x, y, nx, ny)
+            y = ny
+        x = nx
 
 
 def meet(cfg: Config, mappen: Mappen) -> tuple[Kalibratie, list[str]]:
@@ -121,34 +132,38 @@ def meet(cfg: Config, mappen: Mappen) -> tuple[Kalibratie, list[str]]:
     hist = {(laag, k): np.zeros(_BAKKEN, dtype=np.int64) for laag in lagen for k in KLASSEN}
     groen = {(jaar, k): [0, 0] for jaar in ("nu", "vorig") for k in KLASSEN}
     res = cfg.signalen.resolutie_m
-    for tegel in _tegels(cfg.gebied.bbox_rd):
-        transform, vorm = grid(tegel, res)
-        maskers = {k: _masker(vlakken[k], transform, vorm) for k in KLASSEN}
-        if not any(m.any() for m in maskers.values()):
-            continue
-        for jaar in ("nu", "vorig"):
-            zomer_k, cir_k = f"zomer_{jaar}", f"cir_{jaar}"
-            if zomer_k not in lagen:  # zonder RGB-zomerfoto geen schaduwmasker
+    with open_bronnen({k: bronnen[k] for k in lagen}, vul_dtm=False) as open_rasters:
+        for tegel in _tegels(cfg.gebied.bbox_rd, res):
+            transform, vorm = grid(tegel, res)
+            maskers = {k: _masker(vlakken[k], transform, vorm) for k in KLASSEN}
+            if not any(m.any() for m in maskers.values()):
                 continue
-            zomer = _venster(bronnen[zomer_k], transform, vorm, Resampling.bilinear)
-            cir = (_venster(bronnen[cir_k], transform, vorm, Resampling.bilinear)
-                   if cir_k in lagen else None)  # fmt: skip
-            licht = ~np.ma.getmaskarray(zomer).any(axis=0)
-            licht &= ~schaduw(zomer, cfg.signalen.schaduw_helderheid)
-            e = exg(zomer)
-            if cir is not None:
-                cir_ok = ~np.ma.getmaskarray(cir).any(axis=0)
-                nd = ndvi_cir(cir)
-            veg = vegetatie(zomer, cir, cfg, jaar)
-            for k, m in maskers.items():
-                sel = m & licht
-                if not sel.any():
+            for jaar in ("nu", "vorig"):
+                zomer_k, cir_k = f"zomer_{jaar}", f"cir_{jaar}"
+                if zomer_k not in lagen:  # zonder RGB-zomerfoto geen schaduwmasker
                     continue
-                hist[(zomer_k, k)] += _bak(e[sel])
-                if cir is not None and (sel & cir_ok).any():
-                    hist[(cir_k, k)] += _bak(nd[sel & cir_ok])
-                groen[(jaar, k)][0] += int((veg & sel).sum())
-                groen[(jaar, k)][1] += int(sel.sum())
+                zomer = _venster(open_rasters[zomer_k], transform, vorm, Resampling.bilinear)
+                cir = (
+                    _venster(open_rasters[cir_k], transform, vorm, Resampling.bilinear)
+                    if cir_k in lagen
+                    else None
+                )
+                licht = ~np.ma.getmaskarray(zomer).any(axis=0)
+                licht &= ~schaduw(zomer, cfg.signalen.schaduw_helderheid)
+                e = exg(zomer)
+                if cir is not None:
+                    cir_ok = ~np.ma.getmaskarray(cir).any(axis=0)
+                    nd = ndvi_cir(cir)
+                veg = vegetatie(zomer, cir, cfg, jaar)
+                for k, m in maskers.items():
+                    sel = m & licht
+                    if not sel.any():
+                        continue
+                    hist[(zomer_k, k)] += _bak(e[sel])
+                    if cir is not None and (sel & cir_ok).any():
+                        hist[(cir_k, k)] += _bak(nd[sel & cir_ok])
+                    groen[(jaar, k)][0] += int((veg & sel).sum())
+                    groen[(jaar, k)][1] += int(sel.sum())
 
     uit = Kalibratie()
     for laag in lagen:

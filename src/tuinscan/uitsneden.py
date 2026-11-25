@@ -5,7 +5,10 @@ Geen adrestekst op de beelden; bestandsnamen bevatten alleen het VHE-nummer.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +17,9 @@ from PIL import Image, ImageDraw
 from rasterio.errors import RasterioIOError
 from rasterio.windows import from_bounds
 from shapely.geometry.base import BaseGeometry
+
+from tuinscan.bestanden import schrijf_atomair
+from tuinscan.mappen import GERESERVEERD
 
 log = logging.getLogger(__name__)
 
@@ -44,23 +50,43 @@ def _ringen(geom: BaseGeometry):
             yield binnen.coords
 
 
+_VEILIG_VHE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def veilige_bestandsnaam(vhe_nummer: str) -> str:
+    """Maak een VHE-nummer veilig als bestandsnaam op Windows zonder botsingen."""
+    s = str(vhe_nummer)
+    if _VEILIG_VHE.fullmatch(s) and s.upper() not in GERESERVEERD:
+        return s
+    schoon = re.sub(r"[^A-Za-z0-9_-]+", "_", s).strip("_-") or "vhe"
+    if schoon.upper() in GERESERVEERD:
+        schoon = f"vhe_{schoon}"
+    h = hashlib.sha256(s.encode("utf-8")).hexdigest()[:8]
+    return f"{schoon[:40]}_{h}"
+
+
 def maak_uitsnede(
-    bron: Path | None, tuin_geom: BaseGeometry, buffer_m: float, max_px: int, doel: Path
+    bron: object, tuin_geom: BaseGeometry, buffer_m: float, max_px: int, doel: Path
 ) -> Path | None:
     """RGB-uitsnede van bounds + buffer, langste zijde `max_px`, met gele tuincontour."""
-    if bron is None or not Path(bron).exists() or tuin_geom is None or tuin_geom.is_empty:
+    if bron is None or tuin_geom is None or tuin_geom.is_empty:
+        return None
+    is_pad = isinstance(bron, (str, Path))
+    if is_pad and not Path(bron).exists():
         return None
     minx, miny, maxx, maxy = tuin_geom.bounds
     bounds = (minx - buffer_m, miny - buffer_m, maxx + buffer_m, maxy + buffer_m)
     try:
-        with rasterio.open(bron) as src:
+        ctx = rasterio.open(bron) if is_pad else nullcontext(bron)
+        with ctx as src:
             venster = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
             if venster.width < 1 or venster.height < 1:
                 return None
             data = src.read(window=venster, boundless=True, masked=True)
             transform = src.window_transform(venster)
     except RasterioIOError as fout:
-        log.warning("uitsnede overgeslagen, bron onleesbaar (%s): %s", Path(bron).name, fout)
+        naam = Path(bron).name if is_pad else Path(str(getattr(bron, "name", bron))).name
+        log.warning("uitsnede overgeslagen, bron onleesbaar (%s): %s", naam, fout)
         return None
     if data.shape[0] < 3 or np.ma.getmaskarray(data[:3]).all():
         return None
@@ -84,17 +110,18 @@ def maak_uitsnede(
         teken.line(punten, fill=CONTOUR_KLEUR, width=CONTOUR_BREEDTE, joint="curve")
 
     doel = Path(doel)
-    doel.parent.mkdir(parents=True, exist_ok=True)
-    beeld.save(doel, "JPEG", quality=JPEG_KWALITEIT)
+    with schrijf_atomair(doel) as tmp:
+        beeld.save(tmp, "JPEG", quality=JPEG_KWALITEIT)
     return doel
 
 
 def maak_uitsneden(
-    vhe_nummer: str, tuin_geom: BaseGeometry, bronnen: dict[str, Path | None], map: Path
+    vhe_nummer: str, tuin_geom: BaseGeometry, bronnen: dict[str, object], map: Path
 ) -> dict[str, Path | None]:
     """Thumbnails en detailbeelden voor één tuin in `map`/uitsneden/{vhe}_{sleutel}.jpg."""
+    prefix = veilige_bestandsnaam(vhe_nummer)
     uit: dict[str, Path | None] = {}
     for sleutel, (bronsleutel, max_px) in UITSNEDEN.items():
-        doel = Path(map) / "uitsneden" / f"{vhe_nummer}_{sleutel}.jpg"
+        doel = Path(map) / "uitsneden" / f"{prefix}_{sleutel}.jpg"
         uit[sleutel] = maak_uitsnede(bronnen.get(bronsleutel), tuin_geom, BUFFER_M, max_px, doel)
     return uit

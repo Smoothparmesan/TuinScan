@@ -172,17 +172,21 @@ def s2_hoge_begroeiing(tr: TuinRasters, cfg: Config) -> float | None:
 
 
 def s3_overhang(tr: TuinRasters, cfg: Config) -> float | None:
-    """m² in de overhangzone met begroeiing en ndsm > s3_hoogte_m; lege zone -> 0.0."""
+    """m² in de overhangzone met begroeiing en s3_hoogte_m < ndsm (<= s3_max_hoogte_m)."""
     if not tr.zone_masker.any():
         return 0.0
     nu = _nu_met_hoogte(tr, cfg)
     if nu is None:
         return None
+    s = cfg.signalen
     ok, licht, veg, ndsm = nu
-    zone = tr.zone_masker & ok
+    zone = tr.zone_masker & ok & licht
     if not zone.any():
-        return None  # zone ligt volledig buiten de beschikbare beelden
-    hoog = zone & licht & veg & (ndsm > cfg.signalen.s3_hoogte_m)
+        return None  # zone ligt volledig buiten de beschikbare beelden of in schaduw
+    hoogte = ndsm > s.s3_hoogte_m
+    if s.s3_max_hoogte_m > 0:
+        hoogte = hoogte & (ndsm <= s.s3_max_hoogte_m)
+    hoog = zone & veg & hoogte
     return float(hoog.sum()) * _pixel_m2(tr)
 
 
@@ -200,13 +204,45 @@ def _regio_labels(kandidaat: np.ndarray) -> tuple[np.ndarray, int]:
     return labels, len(geoms)
 
 
+def s4a_regios(tr: TuinRasters, cfg: Config) -> list[tuple[float, float]] | None:
+    """(totaal_m2, nieuw_m2) per kandidaat-regio >= s4a_min_m2, of None bij ontbrekend beeld."""
+    s = cfg.signalen
+    nu = _nu_met_hoogte(tr, cfg)
+    if nu is None:
+        return None
+    ok, licht, veg, ndsm = nu
+    tuin = tr.tuin_masker & ok & licht
+    if not tuin.any():
+        return None
+    groen = _verwijd(veg, _px(tr, s.s4a_groen_marge_m))
+    hoogte = (ndsm > s.s4a_hoogte_m) & (ndsm <= s.s4a_max_hoogte_m)
+    kandidaat = tuin & ~groen & hoogte & _buiten_pandmarge(tr, s.s4a_pandmarge_m)
+    labels, n = _regio_labels(_opening(kandidaat, s.s4a_opening_px))
+    if n == 0:
+        return []
+    a = _pixel_m2(tr)
+    lab = labels.ravel()
+    totaal = np.bincount(lab, minlength=n + 1)[1:] * a
+    if tr.ndsm_vorig is not None:
+        vorig = tr.ndsm_vorig
+        nieuw_px = np.ma.getmaskarray(vorig)[0] | (_data(vorig)[0] < s.s4a_vorige_max_m)
+        nieuw = np.bincount(lab, weights=nieuw_px.ravel(), minlength=n + 1)[1:] * a
+    else:
+        nieuw = totaal
+    return [
+        (float(t), float(nw))
+        for t, nw in zip(totaal, nieuw, strict=True)
+        if t >= s.s4a_min_m2
+    ]
+
+
 def s4a_hoog_object(tr: TuinRasters, cfg: Config, negeer_berging: bool) -> float | None:
     """m² nieuwe hoge, niet-groene objecten in de tuin.
 
-    1. Objectpixels: in de tuin, geldig, s4a_hoogte_m < ndsm ≤ s4a_max_hoogte_m (hoger is
-       kruin of dak), niet binnen s4a_groen_marge_m van begroeiing en niet binnen
-       s4a_pandmarge_m van een BAG-pand (hoogte-halo); daarna een opening van
-       s4a_opening_px tegen schuttinglijnen.
+    1. Objectpixels: in de tuin, geldig (niet in schaduw), s4a_hoogte_m < ndsm ≤
+       s4a_max_hoogte_m (hoger is kruin of dak), niet binnen s4a_groen_marge_m van
+       begroeiing en niet binnen s4a_pandmarge_m van een BAG-pand (hoogte-halo); daarna
+       een opening van s4a_opening_px tegen schuttinglijnen.
     2. 8-verbonden regio's; alleen regio's ≥ s4a_min_m2 blijven over.
     3. Bij `negeer_berging` valt daarvan de grootste regio ≤ s4a_standaardberging_max_m2
        weg (vóór de vergelijking met de vorige AHN).
@@ -215,33 +251,21 @@ def s4a_hoog_object(tr: TuinRasters, cfg: Config, negeer_berging: bool) -> float
        nieuwe oppervlak ≥ s4a_min_m2. S4a = som van die (nieuwe) oppervlakken.
     """
     s = cfg.signalen
-    nu = _nu_met_hoogte(tr, cfg)
-    if nu is None:
+    regios = s4a_regios(tr, cfg)
+    if regios is None:
         return None
-    ok, licht, veg, ndsm = nu
-    tuin = tr.tuin_masker & ok
-    if not tuin.any():
-        return None
-    groen = _verwijd(veg, _px(tr, s.s4a_groen_marge_m))
-    hoogte = (ndsm > s.s4a_hoogte_m) & (ndsm <= s.s4a_max_hoogte_m)
-    kandidaat = tuin & licht & ~groen & hoogte & _buiten_pandmarge(tr, s.s4a_pandmarge_m)
-    labels, n = _regio_labels(_opening(kandidaat, s.s4a_opening_px))
-    if n == 0:
+    if not regios:
         return 0.0
-    a = _pixel_m2(tr)
-    lab = labels.ravel()
-    m2 = np.bincount(lab, minlength=n + 1)[1:] * a
-    houd = m2 >= s.s4a_min_m2
+    weg = -1
     if negeer_berging:
-        berging = np.flatnonzero(houd & (m2 <= s.s4a_standaardberging_max_m2))
-        if berging.size:
-            houd[berging[np.argmax(m2[berging])]] = False
-    if tr.ndsm_vorig is not None:
-        vorig = tr.ndsm_vorig
-        nieuw = np.ma.getmaskarray(vorig)[0] | (_data(vorig)[0] < s.s4a_vorige_max_m)
-        m2 = np.bincount(lab, weights=nieuw.ravel(), minlength=n + 1)[1:] * a
-        houd &= m2 >= s.s4a_min_m2
-    return float(m2[houd].sum())
+        berging = [
+            (t, i) for i, (t, _) in enumerate(regios) if t <= s.s4a_standaardberging_max_m2
+        ]
+        if berging:
+            weg = max(berging, key=lambda pair: pair[0])[1]
+    return float(
+        sum(nw for i, (_, nw) in enumerate(regios) if i != weg and nw >= s.s4a_min_m2)
+    )
 
 
 def s5_verharding(tr: TuinRasters, cfg: Config) -> tuple[float | None, float | None]:

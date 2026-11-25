@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections import Counter
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 from jinja2 import Environment, PackageLoader, select_autoescape
@@ -57,7 +58,7 @@ def bouw_rijen(scores: pd.DataFrame, uitsneden: dict[str, dict[str, Path | None]
             "thumb_nu": data_uri(pad.get("thumb_zomer_nu")),
             "thumb_vorig": data_uri(pad.get("thumb_zomer_vorig")),
             "details": [
-                (f"uitsneden/{Path(pad[k]).name}", titel)
+                (f"uitsneden/{quote(Path(pad[k]).name)}", titel)
                 for k, titel in DETAILS if pad.get(k) is not None
             ],
         })  # fmt: skip
@@ -80,9 +81,13 @@ def render_rapport(
     herkomst = None
     if len(scores):
         e = scores.iloc[0]
+        jaren = {"zomer_jaar", "zomer_vorig_jaar", "winter_jaar"}
         sleutels = ("zomer_jaar", "zomer_vorig_jaar", "winter_jaar", "ahn_versie", "parameterset")
         herkomst = {k: _tekst(e.get(k)) or "–" for k in sleutels}
-        herkomst = {k: (v[:-2] if v.endswith(".0") else v) for k, v in herkomst.items()}
+        herkomst = {
+            k: (v[:-2] if k in jaren and v.endswith(".0") and v[:-2].isdigit() else v)
+            for k, v in herkomst.items()
+        }
     per_stap = sorted(Counter(fouten["stap"]).items()) if len(fouten) else []
     env = Environment(
         loader=PackageLoader("tuinscan", "templates"),

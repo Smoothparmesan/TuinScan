@@ -4,7 +4,7 @@ import hashlib
 import json
 import types
 import typing
-from dataclasses import asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,10 @@ class ConfigFout(Exception):
 
 
 SIGNALEN = ("S1", "S2", "S3", "S4a", "S5")  # signalen met een score-regel in de PoC
+FILTER_SLEUTELS = frozenset({
+    "wijk", "complex", "woningtype",
+    "eigen_tuin_ja", "status_uitsluiten", "sloop_renovatie_uitsluiten",
+})
 MAX_PANDMARGE_M = 10.0  # rasters berekent de afstand tot panden tot zover
 
 # Optionele drempels per luchtfotolaag (luchtfoto.lagen.<laag>.<drempel>); zonder waarde
@@ -105,6 +109,7 @@ class Signalen:
     s4a_max_hoogte_m: float  # hoger = boomkruin of dak, geen tuinobject
     s4a_pandmarge_m: float  # hoogte-halo langs BAG-panden negeren (0 = uit)
     s4a_opening_px: int  # morfologische opening (straal in pixels) tegen schuttinglijnen
+    s3_max_hoogte_m: float = 4.5  # hoger = straatboomkruin, geen overhang (0 = uit)
 
 
 @dataclass(frozen=True)
@@ -165,15 +170,19 @@ def _past(w: Any, t: Any) -> bool:
 def _bouw(cls, data: Any, sleutel: str):
     if not isinstance(data, dict):
         raise ConfigFout(f"{sleutel}: verwacht een tabel, kreeg {type(data).__name__}")
-    namen = {f.name for f in fields(cls)}
-    ontbreekt = sorted(namen - data.keys())
+    alle_velden = fields(cls)
+    namen = {f.name for f in alle_velden}
+    verplicht = {
+        f.name for f in alle_velden if f.default is MISSING and f.default_factory is MISSING
+    }
+    ontbreekt = sorted(verplicht - data.keys())
     if ontbreekt:
         raise ConfigFout(f"{sleutel}.{ontbreekt[0]}: ontbreekt")
     onbekend = sorted(data.keys() - namen)
     if onbekend:
         raise ConfigFout(f"{sleutel}.{onbekend[0]}: onbekende sleutel")
     hints = typing.get_type_hints(cls)
-    for naam in namen:
+    for naam in data:
         if not _past(data[naam], hints[naam]):
             raise ConfigFout(f"{sleutel}.{naam}: ongeldig type of waarde ({data[naam]!r})")
     return cls(**data)
@@ -185,6 +194,16 @@ def _valideer(cfg: Config) -> None:
         raise ConfigFout("gebied.bbox_rd: verwacht 4 getallen [xmin, ymin, xmax, ymax]")
     if not (b[0] < b[2] and b[1] < b[3]):
         raise ConfigFout("gebied.bbox_rd: moet xmin < xmax en ymin < ymax hebben")
+    if cfg.gebied.buffer_m < 0:
+        raise ConfigFout("gebied.buffer_m: mag niet negatief zijn")
+    if cfg.pdok.workers < 1:
+        raise ConfigFout("pdok.workers: minstens 1 vereist")
+    onbekend_filter = sorted(set(cfg.tobias.filters) - FILTER_SLEUTELS)
+    if onbekend_filter:
+        toegestaan = ", ".join(sorted(FILTER_SLEUTELS))
+        raise ConfigFout(
+            f"tobias.filters.{onbekend_filter[0]}: onbekend filter; toegestaan: {toegestaan}"
+        )
     if not cfg.score:
         raise ConfigFout("score: minstens één signaal vereist")
     onbekend = sorted(set(cfg.score) - set(SIGNALEN))
@@ -192,6 +211,8 @@ def _valideer(cfg: Config) -> None:
         toegestaan = ", ".join(SIGNALEN)
         raise ConfigFout(f"score.{onbekend[0]}: onbekend signaal; toegestaan: {toegestaan}")
     for naam, r in cfg.score.items():
+        if r.gewicht < 0:
+            raise ConfigFout(f"score.{naam}.gewicht: mag niet negatief zijn")
         if not r.onder < r.boven:
             raise ConfigFout(f"score.{naam}: onder moet kleiner zijn dan boven")
     totaal = sum(r.gewicht for r in cfg.score.values())
@@ -204,9 +225,25 @@ def _valideer(cfg: Config) -> None:
                 raise ConfigFout(f"ahn.vorige.{k}: ontbreekt")
     if not cfg.tuin.delen or not set(cfg.tuin.delen) <= {"voor", "achter"}:
         raise ConfigFout("tuin.delen: alleen 'voor' en/of 'achter' toegestaan")
+    if cfg.tuin.max_diepte_m <= 0:
+        raise ConfigFout("tuin.max_diepte_m: moet groter zijn dan 0")
+    if cfg.tuin.voorzijde_zoekafstand_m <= 0:
+        raise ConfigFout("tuin.voorzijde_zoekafstand_m: moet groter zijn dan 0")
+    if cfg.tuin.min_oppervlak_m2 < 0:
+        raise ConfigFout("tuin.min_oppervlak_m2: mag niet negatief zijn")
+    if cfg.terugkoppeling.top_n < 1:
+        raise ConfigFout("terugkoppeling.top_n: minstens 1 vereist")
+    if cfg.terugkoppeling.controlegroep_n < 0:
+        raise ConfigFout("terugkoppeling.controlegroep_n: mag niet negatief zijn")
     if not cfg.terugkoppeling.oordeel:
         raise ConfigFout("terugkoppeling.oordeel: minstens één waarde (de eerste = terecht)")
     s = cfg.signalen
+    if s.resolutie_m <= 0:
+        raise ConfigFout("signalen.resolutie_m: moet groter zijn dan 0")
+    if not 0 <= s.schaduw_helderheid <= 255:
+        raise ConfigFout("signalen.schaduw_helderheid: verwacht 0 t/m 255")
+    if s.s3_max_hoogte_m < 0 or (s.s3_max_hoogte_m > 0 and s.s3_max_hoogte_m <= s.s3_hoogte_m):
+        raise ConfigFout("signalen.s3_max_hoogte_m: moet 0 zijn of groter dan s3_hoogte_m")
     for naam in ("foto_pandmarge_m", "s4a_pandmarge_m"):
         if not 0 <= getattr(s, naam) <= MAX_PANDMARGE_M:
             raise ConfigFout(f"signalen.{naam}: verwacht 0 t/m {MAX_PANDMARGE_M:g} m")

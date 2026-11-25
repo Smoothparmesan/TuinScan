@@ -1,7 +1,7 @@
 # HANDOFF — Tuinscan
 
 ## Status (2026-11-25)
-- PoC code klaar (plan-taken 1–15 + eindreview-fixes). `uv run pytest -q`: 316 passed; `uv run ruff check .` schoon. Branch `claude/zen-mayer-2lnpdp`.
+- PoC code klaar (plan-taken 1–15 + eindreview-fixes + "best of both"-patch). `uv run pytest -q`: 348 passed; `uv run ruff check .` schoon. Branch `claude/inspiring-bardeen-sbgqro`.
 - Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`. PDOK-feiten + kalibratie: `docs/pdok-bronnen.md`. Gebruik: `README.md`.
 - Spec (Claude Docs "Specsheet Tuinscan") bijgewerkt met de gemeten PDOK-feiten (zomer-CIR bestaat).
 
@@ -14,7 +14,14 @@
 - Zomerfoto's zijn geen true-ortho: daken hellen 0,5–2 m (Houten) tot 3,5–5 m (Amsterdam) → marges rond panden in config.
 - Amsterdam-centrum: 1 van 20 VHE's kreeg een tuin (dichte binnenstad zonder voortuinen); geen fout.
 
+## Recent (best-of-both-patch, 2026-11-25)
+- Overgenomen: één standaardberging per VHE (niet voor én achter), `*`-regel telt niet als VHE, atomaire schrijfacties, mislukte downloadlaag → exit 1, Retry-After + next-link-lusbeveiliging, extra configchecks, rasters één keer per stap open + DTM één keer per wijk gevuld, WMTS-mozaïek direct naar schijf, anker per woningdeel bij meergezinspand, veilige uitsnedenamen + oude uitsneden opruimen, terugkoppelbestand valideert blad/kolommen.
+- Nieuw: `signalen.s3_max_hoogte_m` (standaard 4.5, 0 = uit) — S3 negeert straatboomkruinen. Optionele sleutel (enige met standaardwaarde). Verandert scores + parameterset-hash.
+- Niet overgenomen: rijbaan-voorrang bij voor/achter (zou in hofjes-/bloemkoolwijken met voordeur aan voetpad en parkeerhof achter juist omklappen; `pdok.rijbaan_functies` zit niet in de parameterset-hash).
+- Eigen aanpassingen: terugkoppelbestand zet tekst-/datumformaat op kolomniveau (lege rijen erven het, geen 1000 lege rijen); opruimen oude uitsneden overleeft een vergrendeld bestand (Windows).
+
 ## Open
+- S3-cap 4,5 m valideren op de echte wijk (top-3 vóór/na vergelijken).
 - Task 6 (laptop): PDOK en `/vsicurl/` achter de bedrijfsproxy; QGIS-check uitlijning voor de echte wijk.
 - Task 16 (laptop): echte Tobias-export → `inspecteer` → `kolommen.yaml` controleren → volledige run; `kalibreer` op de eigen wijk; ~10 tuinen in QGIS bekijken vóór de top-20 naar de wijkbeheerder gaat; daarna parameterset bevriezen.
 - Bestaande eigen configs: 6 nieuwe verplichte sleutels (`pdok.rijbaan_functies` + 5 `signalen.*`); de foutmelding noemt ze.
