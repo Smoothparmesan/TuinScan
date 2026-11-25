@@ -14,7 +14,7 @@ from tuinscan import tobias
 from tuinscan.config import Config, parameterset_hash
 from tuinscan.download import lees_vector
 from tuinscan.fouten import Foutenlijst
-from tuinscan.koppeling import _href_ids, koppel, koppelpercentage
+from tuinscan.koppeling import href_ids, koppel, koppelpercentage
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.cache import vector_pad
 from tuinscan.rasters import bouw_tuinrasters, bronnen_uit_cache, overhang_zone
@@ -140,7 +140,7 @@ def _woon_pand_ids(vbo: gpd.GeoDataFrame, velden: dict[str, str]) -> set[str]:
     for rij in vbo.to_dict("records"):
         doel = rij.get(velden["vbo_gebruiksdoel"])
         if velden["woonfunctie"] in str(doel):
-            ids.update(_href_ids(rij.get(velden["vbo_pand_href"])))
+            ids.update(href_ids(rij.get(velden["vbo_pand_href"])))
     return ids
 
 
@@ -177,10 +177,17 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
         bestaand = pd.read_csv(fout_pad, dtype=str, keep_default_na=False)
         fouten.regels = [tuple(r) for r in bestaand.itertuples(index=False) if r[1] != SCORE_STAP]
 
-    gekoppeld = koppel(vhes, vbo, panden, percelen, velden, Foutenlijst())
-    perceel_van = dict(
-        zip(gekoppeld["vhe_nummer"].astype(str), gekoppeld["perceel_id"], strict=True)
-    )
+    try:
+        gekoppeld = koppel(vhes, vbo, panden, percelen, velden, Foutenlijst())
+        perceel_van = dict(
+            zip(gekoppeld["vhe_nummer"].astype(str), gekoppeld["perceel_id"], strict=True)
+        )
+    except Exception as e:  # zonder perceel geldt alleen: geen berging negeren
+        log.exception("koppeling voor bergingscontrole mislukt")
+        fouten.voeg_toe(
+            "alle", SCORE_STAP, f"bergingscontrole overgeslagen: koppeling mislukt: {e}"
+        )
+        perceel_van = {}
     percelen_idx = percelen.set_index(percelen[velden["perceel_id"]].astype(str))
     bijgebouw = _bijgebouw_op_perceel(percelen_idx, panden, _woon_pand_ids(vbo, velden))
     berging = (
@@ -230,8 +237,15 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
         })  # fmt: skip
         scores_geom.append(delen.geometry.union_all())
 
+    fouten.schrijf(fout_pad)  # eerst: de foutenlijst gaat nooit verloren
     kol_deel = ["vhe_nummer", "deel", "oppervlak_m2", *SIGNAAL_KOLOMMEN]
     pd.DataFrame(deel_rijen, columns=kol_deel).to_parquet(rd / "signalen.parquet", index=False)
+    kol_score = [
+        "vhe_nummer", "adres", "wijk", "complex", "score", "rang_in_wijk", *SIGNAAL_KOLOMMEN,
+        *(f"bijdrage_{k}" for k in cfg.score), "reden_1", "reden_2", "reden_codes",
+        "ontbrekend", "zomer_jaar", "zomer_vorig_jaar", "winter_jaar", "ahn_versie",
+        "parameterset",
+    ]  # fmt: skip
     scores = pd.DataFrame(vhe_rijen)
     if len(scores):
         sleutel = scores["vhe_nummer"].map(lambda v: (0, int(v), "") if v.isdigit() else (1, 0, v))
@@ -241,18 +255,15 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
         scores["rang_in_wijk"] = (
             orde.groupby("wijk", sort=False).cumcount().add(1).reindex(scores.index)
         )
-    else:
-        scores["rang_in_wijk"] = pd.Series(dtype=int)
+    scores = scores.reindex(columns=kol_score)
     scores.to_parquet(rd / "scores.parquet", index=False)
 
-    laag = scores.copy()
-    laag["reden_codes"] = laag["reden_codes"].map(_list_naar_tekst) if len(laag) else []
-    laag["ontbrekend"] = laag["ontbrekend"].map(_list_naar_tekst) if len(laag) else []
-    laag = laag[["vhe_nummer", "adres", "wijk", "complex", "score", "rang_in_wijk", "reden_codes",
-                 "ontbrekend"]]  # fmt: skip
+    laag = scores[["vhe_nummer", "adres", "wijk", "complex", "score", "rang_in_wijk",
+                   "reden_codes", "ontbrekend"]].copy()  # fmt: skip
+    for k in ("reden_codes", "ontbrekend"):
+        laag[k] = laag[k].map(_list_naar_tekst).astype(object)
     gpd.GeoDataFrame(laag, geometry=scores_geom, crs=28992).to_file(
-        gpkg, layer="scores", driver="GPKG", promote_to_multi=True
+        gpkg, layer="scores", driver="GPKG", promote_to_multi=True, geometry_type="MultiPolygon"
     )
-    fouten.schrijf(fout_pad)
     print(f"Score berekend voor {len(scores)} VHE's; {len(fouten.regels)} regels in foutenlijst")
     return scores

@@ -187,11 +187,11 @@ def test_duplicate_of_failed_first_vhe_is_not_dubbel(miniwijk, monkeypatch):
 
 
 @pytest.mark.parametrize("maak", [np.array, pd.Series])
-def test_href_ids_accepts_array_like(maak):
+def testhref_ids_accepts_array_like(maak):
     h = maak([PAND_ITEMS + "abc", PAND_ITEMS + "def/"])
-    assert koppeling._href_ids(h) == ["abc", "def"]
-    assert koppeling._href_ids(maak([], dtype=object)) == []
-    assert koppeling._href_ids(np.array(PAND_ITEMS + "ghi")) == ["ghi"]  # 0-d array
+    assert koppeling.href_ids(h) == ["abc", "def"]
+    assert koppeling.href_ids(maak([], dtype=object)) == []
+    assert koppeling.href_ids(np.array(PAND_ITEMS + "ghi")) == ["ghi"]  # 0-d array
 
 
 def test_pand_via_numpy_href(miniwijk):

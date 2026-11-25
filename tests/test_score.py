@@ -135,3 +135,26 @@ def test_negeer_berging_requires_column_and_no_bijgebouw(miniwijk, monkeypatch):
     stap_score(mw.cfg, mw.mappen)
     # schuur staat op perceel P2 (V) -> bijgebouw; rijwoningen op P1 hebben geen bijgebouw
     assert any(gezien.values()) and not all(gezien.values())
+
+
+def test_all_vhe_fail_no_crash(miniwijk, monkeypatch):
+    mw = miniwijk
+    stap_tuinen(mw.cfg, mw.mappen)
+
+    def kapot(tr, cfg, negeer):
+        raise RuntimeError("stuk")
+
+    monkeypatch.setattr(stappen, "bereken_signalen", kapot)
+    sc = stap_score(mw.cfg, mw.mappen)
+    rd = mw.mappen.ronde_dir
+    assert len(sc) == 0 and len(pd.read_parquet(rd / "scores.parquet")) == 0
+    assert len(gpd.read_file(rd / "tuinen.gpkg", layer="scores")) == 0
+    fouten = pd.read_csv(rd / "foutenlijst.csv", dtype=str)
+    assert (fouten["stap"] == "score").sum() >= 1
+
+
+def test_nan_signal_counts_as_missing(miniwijk):
+    sig = {**_boven(miniwijk.cfg), "S1": float("nan")}
+    u = bereken_score(sig, miniwijk.cfg)
+    assert u.score == 75.0 and u.ontbrekend == ["S1"]
+    assert aggregeer_delen([(1.0, {"S1": float("nan")})])["S1"] is None

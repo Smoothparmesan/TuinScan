@@ -23,7 +23,7 @@ DUBBEL = "meerdere VHE's op hetzelfde verblijfsobject"
 UIT_KOLOMMEN = ("pand_id", "perceel_id")
 
 
-def _href_ids(waarde: object) -> list[str]:
+def href_ids(waarde: object) -> list[str]:
     """Feature-id's (laatste URL-segment) uit een `pand.href`-waarde."""
     if waarde is None or (isinstance(waarde, float) and waarde != waarde):
         return []
@@ -67,7 +67,7 @@ class _Koppelaar:
         punt = vbo_rij.geometry
         kandidaten = [
             self.pand_per_fid[f]
-            for f in _href_ids(vbo_rij[self.v["vbo_pand_href"]])
+            for f in href_ids(vbo_rij[self.v["vbo_pand_href"]])
             if f in self.pand_per_fid
         ]
         if len(kandidaten) == 1:

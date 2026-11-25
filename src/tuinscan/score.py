@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pandas as pd
+
 from tuinscan.config import Config
 
 REDEN_TEKST = {
@@ -40,7 +42,7 @@ def bereken_score(signalen: dict[str, float | None], cfg: Config) -> ScoreUitkom
     ontbrekend: list[str] = []
     for naam, regel in cfg.score.items():
         x = signalen.get(naam)
-        if x is None:
+        if pd.isna(x):
             ontbrekend.append(naam)
             bijdragen[naam] = 0.0
         else:
@@ -70,7 +72,7 @@ def aggregeer_delen(delen: list[tuple[float, dict[str, float | None]]]) -> dict[
     uit: dict[str, float | None] = {}
     sleutels = {k for _, s in delen for k in s}
     for k in sleutels:
-        met = [(m2, s[k]) for m2, s in delen if s.get(k) is not None]
+        met = [(m2, s[k]) for m2, s in delen if not pd.isna(s.get(k))]
         if not met:
             uit[k] = None
         elif k in OPPERVLAK_SIGNALEN:
