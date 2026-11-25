@@ -28,6 +28,22 @@ Getest vanuit de cloud-ontwikkelomgeving op een proefgebied in Amsterdam (RD ≈
 - CIR-banden: band 1 = NIR, band 2 = rood, band 3 = groen. NDVI = (b1 − b2)/(b1 + b2). JPEG-stretch drukt de NDVI: startdrempel 0,2 i.p.v. 0,3.
 - Beschikbaar nu: zomer `2025_ortho25`, `2024_ortho25` (+ IR); winter `2026_orthoHR`, `2025_orthoHR`. `2026_quickortho25` gaf op het proefgebied een volledig witte tegel (HTTP 200): nog geen dekking. Witte of zwarte tegels dus als ontbrekend behandelen.
 
+### Kalibratie begroeiingsmasker (Houten, RD 139850–140150 / 447550–447850, 2026-11-25)
+
+Gemeten met `tuinscan kalibreer` op zonbeschenen pixels, klassen 1 m naar binnen verkleind (voetpad 0,3 m):
+
+| Laag | rijbaan p50 | dak p50 / p95 | BGT-groen p25 / p50 | voorstel |
+| --- | --- | --- | --- | --- |
+| `2025_ortho25IR` (NDVI) | −0,05 | 0,10 / 0,28 | 0,28 / 0,42 | 0,26 |
+| `2024_ortho25IR` (NDVI) | −0,11 | −0,10 / 0,18 | 0,23 / 0,27 | 0,18 |
+| `2025_ortho25` (ExG) | 0,04 | 0,07 / 0,13 | 0,13 / 0,17 | 0,12 |
+| `2024_ortho25` (ExG) | 0,05 | 0,09 / 0,13 | 0,13 / 0,14 | 0,12 |
+
+- De NDVI-schaal verschilt per vlucht (groen 2025 p50 0,42 tegen 0,27 in 2024): één vaste drempel vergelijkt de jaren niet eerlijk. Daarom kan elke zomerlaag een eigen drempel hebben (`luchtfoto.lagen.<laag>.ndvi_drempel`/`exg_drempel`).
+- ExG scheidt slecht (dak p95 ≈ groen p25); het masker gebruikt daarom NDVI waar CIR geldig is en ExG alleen als terugval (startdrempel 0,12; de oude 0,05 zag 34–61 % van de rijbaan en 77–92 % van de daken als groen).
+- Met de voorstellen: rijbaan 4 % / 2 %, daken 8 % / 4 %, BGT-groen 79 % / 85 % groen (2025 / 2024). In 2025 overlappen dak en groen: ~85 % groen is daar niet haalbaar zonder meer daken als groen te zien. Voetpaden blijven 30–40 % "groen" (overhangend groen, scheve daken en bomen).
+- De zomerfoto's zijn geen true-ortho: daken hellen ~0,5–2 m (Houten) tot 3,5–5 m (Amsterdam) over de tuin; winter-HR ~0,25–1 m.
+
 ## AHN (COG)
 
 - Kaartbladindex DSM: `https://service.pdok.nl/rws/actueel-hoogtebestand-nederland/atom/downloads/dsm_05m/kaartbladindex.json`
