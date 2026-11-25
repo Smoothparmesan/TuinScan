@@ -80,3 +80,10 @@ def test_wrong_type_raises_configfout_naming_key(tmp_path, sleutel, wijzig):
     with pytest.raises(ConfigFout) as e:
         laad_config(pad)
     assert sleutel in str(e.value)
+
+
+def test_ahn_vorige_requires_indexes(tmp_path):
+    pad = _schrijf(tmp_path, lambda d: d["ahn"].update(vorige={"versie": "v1"}))
+    with pytest.raises(ConfigFout) as e:
+        laad_config(pad)
+    assert "ahn.vorige" in str(e.value)

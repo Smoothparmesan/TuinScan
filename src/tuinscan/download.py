@@ -9,6 +9,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import requests
+from rasterio.errors import RasterioIOError
 
 from tuinscan.config import Config
 from tuinscan.mappen import Mappen
@@ -35,6 +36,7 @@ class DownloadRapport:
     overgeslagen: list[str] = field(default_factory=list)
     niet_geconfigureerd: list[str] = field(default_factory=list)
     leeg: list[str] = field(default_factory=list)
+    mislukt: dict[str, str] = field(default_factory=dict)
 
 
 def manifest_pad(cache: Path) -> Path:
@@ -107,6 +109,8 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
 
     def klaar(sleutel: str, pad: Path) -> bool:
         if not vernieuw and pad.exists() and manifest.heeft(sleutel, bbox):
+            if manifest.lees(sleutel).get("status") == "leeg":
+                return False
             rapport.overgeslagen.append(sleutel)
             return True
         return False
@@ -134,14 +138,22 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
         if klaar(sleutel, pad):
             continue
         url = cfg.luchtfoto.cir_wmts if sleutel.startswith("cir_") else cfg.luchtfoto.rgb_wmts
-        if url not in caps:
-            caps[url] = haal_capabilities(url, cfg.luchtfoto.matrixset, sessie)
-        c = caps[url]
-        matrix = c.matrices[str(spec["zoom"])]
-        info = download_mozaiek(
-            url, spec["laag"], cfg.luchtfoto.matrixset, matrix,
-            c.lagen[spec["laag"]], bbox, pad, sessie, cfg.pdok.workers,
-        )
+        try:
+            if url not in caps:
+                caps[url] = haal_capabilities(url, cfg.luchtfoto.matrixset, sessie)
+            c = caps[url]
+            if spec["laag"] not in c.lagen:
+                raise KeyError(f"laag {spec['laag']} niet in capabilities")
+            if str(spec["zoom"]) not in c.matrices:
+                raise KeyError(f"zoom {spec['zoom']} niet in matrixset")
+            info = download_mozaiek(
+                url, spec["laag"], cfg.luchtfoto.matrixset, c.matrices[str(spec["zoom"])],
+                c.lagen[spec["laag"]], bbox, pad, sessie, cfg.pdok.workers,
+            )
+        except (KeyError, ValueError, OSError, requests.RequestException) as e:
+            rapport.mislukt[sleutel] = str(e)
+            log.warning("%s: mislukt (%s)", sleutel, e)
+            continue
         extra = {"laag": spec["laag"], "tegels_totaal": info.tegels_totaal,
                  "tegels_mislukt": info.tegels_mislukt}
         if info.tegels_totaal and info.tegels_mislukt == info.tegels_totaal:
@@ -156,11 +168,18 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
         pad = raster_pad(mappen.cache, sleutel)
         if klaar(sleutel, pad):
             continue
-        index = _laad_index(
-            index_url, mappen.cache / "raster" / f"{sleutel}_index.json", sessie, vernieuw
-        )
-        bladen = kaartbladen_voor_bbox(index, cfg.ahn.url_veld, bbox)
-        lees_ahn(bladen, bbox, pad)
+        try:
+            index = _laad_index(
+                index_url, mappen.cache / "raster" / f"{sleutel}_index.json", sessie, vernieuw
+            )
+            bladen = kaartbladen_voor_bbox(index, cfg.ahn.url_veld, bbox)
+            if not bladen:
+                raise ValueError("geen AHN-kaartbladen voor deze bbox")
+            lees_ahn(bladen, bbox, pad)
+        except (ValueError, KeyError, RasterioIOError, requests.RequestException) as e:
+            rapport.mislukt[sleutel] = str(e)
+            log.warning("%s: mislukt (%s)", sleutel, e)
+            continue
         manifest.registreer(sleutel, index_url, bbox, {"kaartbladen": bladen})
         rapport.opgehaald.append(sleutel)
     return rapport

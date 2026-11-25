@@ -48,3 +48,22 @@ def test_proxy_opties_only_when_unset():
     assert o["GDAL_CURL_CA_BUNDLE"] == "/ca.pem" and o["CURL_CA_BUNDLE"] == "/ca.pem"
     env.update(GDAL_HTTP_PROXY="x", GDAL_CURL_CA_BUNDLE="y", CURL_CA_BUNDLE="z")
     assert gdal_proxy_opties(env) == {}
+
+
+def test_ahn_snaps_to_source_grid(tmp_path):
+    _tif(tmp_path / "a.tif", 0, 1.0)
+    uit = lees_ahn([str(tmp_path / "a.tif")], (5.1, 5.3, 9.6, 9.9), tmp_path / "x.tif")
+    with rasterio.open(uit) as r:
+        assert tuple(r.bounds) == (5.0, 5.0, 10.0, 10.0)
+        assert r.transform.c % 0.5 == 0 and r.transform.f % 0.5 == 0
+        assert set(np.unique(r.read(1))) == {1.0}
+
+
+def test_ahn_closes_datasets_when_open_fails(tmp_path):
+    import pytest
+    from rasterio.errors import RasterioIOError
+
+    _tif(tmp_path / "a.tif", 0, 1.0)
+    with pytest.raises(RasterioIOError):
+        lees_ahn([str(tmp_path / "a.tif"), str(tmp_path / "ontbreekt.tif")], (0, 0, 5, 5),
+                 tmp_path / "x.tif")

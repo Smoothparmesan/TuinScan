@@ -176,6 +176,11 @@ def _valideer(cfg: Config) -> None:
     totaal = sum(r.gewicht for r in cfg.score.values())
     if abs(totaal - 100) > 1e-9:
         raise ConfigFout(f"score: gewichten moeten samen 100 zijn, nu {totaal:g}")
+    v = cfg.ahn.vorige
+    if v is not None:
+        for k in ("versie", "dtm_index", "dsm_index"):
+            if not isinstance(v, dict) or not v.get(k):
+                raise ConfigFout(f"ahn.vorige.{k}: ontbreekt")
     if not cfg.tuin.delen or not set(cfg.tuin.delen) <= {"voor", "achter"}:
         raise ConfigFout("tuin.delen: alleen 'voor' en/of 'achter' toegestaan")
 

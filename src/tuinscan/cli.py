@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
         r = voer_download_uit(cfg, mappen, args.vernieuw)
         print(
             f"download: opgehaald {len(r.opgehaald)}, overgeslagen {len(r.overgeslagen)}, "
-            f"niet geconfigureerd {r.niet_geconfigureerd}, leeg {r.leeg}"
+            f"niet geconfigureerd {r.niet_geconfigureerd}, leeg {r.leeg}, mislukt {r.mislukt}"
         )
         return 0
     print(f"Stap '{args.stap}': nog niet beschikbaar")

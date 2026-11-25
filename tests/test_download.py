@@ -123,3 +123,60 @@ def test_vector_roundtrip_list_columns(tmp_path, aanroepen):
     gdf = lees_vector(mp.cache / "vector" / "bag_vbo.gpkg")
     assert gdf["pand.href"].iloc[0] == ["x/1", "x/2"]
     assert gdf["feature_id"].iloc[0] == "a"
+
+
+def test_ahn_outside_coverage_does_not_crash(tmp_path, aanroepen, monkeypatch):
+    far = gpd.GeoDataFrame({"url": ["k.tif"]}, geometry=[box(9e5, 9e5, 9.1e5, 9.1e5)], crs=28992)
+    monkeypatch.setattr(dl, "_laad_index", lambda *a, **k: far)
+    cfg, mp = maak_cfg(tmp_path)
+    r = voer_download_uit(cfg, mp, False)
+    assert set(r.mislukt) == {"ahn_dtm", "ahn_dsm"} and len(r.opgehaald) == 11
+
+
+def test_ahn_read_error_recorded(tmp_path, aanroepen, monkeypatch):
+    from rasterio.errors import RasterioIOError
+
+    def stuk(*a, **k):
+        raise RasterioIOError("kapot")
+
+    monkeypatch.setattr(dl, "lees_ahn", stuk)
+    cfg, mp = maak_cfg(tmp_path)
+    assert set(voer_download_uit(cfg, mp, False).mislukt) == {"ahn_dtm", "ahn_dsm"}
+
+
+def test_missing_wmts_layer_or_failure_continues(tmp_path, aanroepen, monkeypatch):
+    def w(d):
+        d["luchtfoto"]["lagen"]["winter_nu"]["laag"] = "2099_orthoHR"
+        d["luchtfoto"]["lagen"]["winter_vorig"]["zoom"] = "99"
+
+    orig = dl.download_mozaiek
+
+    def stuk(url, laag, *a, **k):
+        if laag == "2024_ortho25":
+            raise OSError("netwerk")
+        return orig(url, laag, *a, **k)
+
+    monkeypatch.setattr(dl, "download_mozaiek", stuk)
+    cfg, mp = maak_cfg(tmp_path, w)
+    r = voer_download_uit(cfg, mp, False)
+    assert set(r.mislukt) == {"winter_nu", "winter_vorig", "zomer_vorig"}
+    assert "cir_nu" in r.opgehaald
+
+
+def test_leeg_mosaic_is_refetched(tmp_path, aanroepen):
+    aanroepen["mislukt"]["n"] = 4
+    cfg, mp = maak_cfg(tmp_path)
+    voer_download_uit(cfg, mp, False)
+    aanroepen["mislukt"]["n"] = 0
+    r = voer_download_uit(cfg, mp, False)
+    assert len(r.opgehaald) == 6 and r.leeg == []
+
+
+def test_empty_vector_roundtrip(tmp_path):
+    from tuinscan.download import schrijf_vector
+    from tuinscan.pdok.ogc import haal_features  # noqa: F401
+
+    leeg = gpd.GeoDataFrame({"feature_id": []}, geometry=[], crs=28992)
+    pad = tmp_path / "cache" / "vector" / "x.gpkg"
+    schrijf_vector(leeg, pad)
+    assert len(lees_vector(pad)) == 0

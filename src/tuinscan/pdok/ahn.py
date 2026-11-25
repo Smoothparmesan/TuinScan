@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import os
+from contextlib import ExitStack
 from pathlib import Path
 
 import geopandas as gpd
@@ -51,14 +53,20 @@ def lees_ahn(bronnen: list[str], bbox, doel: Path) -> Path:
     doel = Path(doel)
     doel.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.Env(**gdal_proxy_opties()):
-        datasets = [rasterio.open(_bron(b)) for b in bronnen]
-        try:
+        with ExitStack() as stack:
+            datasets = [stack.enter_context(rasterio.open(_bron(b))) for b in bronnen]
             nodata = datasets[0].nodata
             fill = np.float32(nodata if nodata is not None else np.finfo("float32").max)
-            res = datasets[0].res
-            minx, miny, maxx, maxy = (float(v) for v in bbox)
-            b_, h_ = round((maxx - minx) / res[0]), round((maxy - miny) / res[1])
-            transform = from_origin(minx, maxy, res[0], res[1])
+            rx, ry = datasets[0].res
+            t0 = datasets[0].transform
+            bx0, by0, bx1, by1 = (float(v) for v in bbox)
+            # snap naar het pixelraster van de eerste bron (naar buiten afgerond)
+            minx = t0.c + math.floor((bx0 - t0.c) / rx + 1e-9) * rx
+            maxx = t0.c + math.ceil((bx1 - t0.c) / rx - 1e-9) * rx
+            maxy = t0.f - math.floor((t0.f - by1) / ry + 1e-9) * ry
+            miny = t0.f - math.ceil((t0.f - by0) / ry - 1e-9) * ry
+            b_, h_ = round((maxx - minx) / rx), round((maxy - miny) / ry)
+            transform = from_origin(minx, maxy, rx, ry)
             data = np.full((h_, b_), fill, dtype=np.float32)
             for d in datasets:
                 venster = from_bounds(minx, miny, maxx, maxy, d.transform)
@@ -68,9 +76,6 @@ def lees_ahn(bronnen: list[str], bbox, doel: Path) -> Path:
                 ).astype(np.float32)
                 leeg = data == fill
                 data[leeg] = deel[leeg]
-        finally:
-            for d in datasets:
-                d.close()
         data = data[np.newaxis]
         nodata = float(fill)
         with rasterio.open(
