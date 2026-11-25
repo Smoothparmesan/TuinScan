@@ -1,12 +1,15 @@
 import io
+import logging
 from pathlib import Path
 
+import numpy as np
 import pytest
 import rasterio
 import requests
 import responses
 from PIL import Image
 
+from tuinscan.pdok import wmts
 from tuinscan.pdok.wmts import (
     TileMatrix,
     download_mozaiek,
@@ -28,6 +31,18 @@ def jpeg(kleur):
     buf = io.BytesIO()
     Image.new("RGB", (256, 256), kleur).save(buf, "JPEG", quality=95)
     return buf.getvalue()
+
+
+def jpeg_ruis(laag, hoog, seed=0):
+    arr = np.random.default_rng(seed).integers(laag, hoog + 1, (256, 256, 3), dtype=np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(arr).save(buf, "JPEG", quality=95)
+    return buf.getvalue()
+
+
+@pytest.fixture(autouse=True)
+def geen_slaap(monkeypatch):
+    monkeypatch.setattr(wmts, "_slaap", lambda s: None)
 
 
 def test_resolution_from_scale():
@@ -58,18 +73,17 @@ def test_tiles_clipped_to_matrix():
     ]
 
 
-def _mock(kleuren, status=None):
-    tw = 256 * 0.21
+def _mock(kleuren, status=None, bodies=None):
     for (c, r), k in kleuren.items():
         st = (status or {}).get((c, r), 200)
+        body = (bodies or {}).get((c, r)) or (jpeg(k) if st == 200 else b"nope")
         responses.add(
             responses.GET,
             f"{URL}/2025_ortho25/EPSG:28992/14/{c}/{r}.jpeg",
-            body=jpeg(k) if st == 200 else b"nope",
+            body=body,
             status=st,
             content_type="image/jpeg",
         )
-    return tw
 
 
 def _bbox_2x2():
@@ -144,3 +158,75 @@ def test_white_or_black_tile_is_masked(tmp_path, kleur):
 def test_lijst_lagen():
     responses.add(responses.GET, URL, body=CAPS.read_bytes(), content_type="text/xml")
     assert lijst_lagen(URL) == ["2025_ortho25", "2024_ortho25"]
+
+
+def _run(tmp_path, formaat="image/jpeg"):
+    return download_mozaiek(
+        URL, "2025_ortho25", "EPSG:28992", matrix(), formaat, _bbox_2x2(),
+        tmp_path / "m.tif", requests.Session(), 2,
+    )
+
+
+@responses.activate
+def test_near_white_noisy_tile_is_masked(tmp_path):
+    _mock(KLEUREN, bodies={(101, 201): jpeg_ruis(252, 255)})
+    info = _run(tmp_path)
+    assert info.tegels_mislukt == 1
+    with rasterio.open(info.pad) as ds:
+        assert (ds.read_masks(1)[256:, 256:] == 0).all()
+
+
+@responses.activate
+def test_non_image_body_is_masked(tmp_path):
+    _mock(KLEUREN, bodies={(100, 200): b"<html>fout</html>"})
+    assert _run(tmp_path).tegels_mislukt == 1
+
+
+@responses.activate
+def test_all_failed_no_exception(tmp_path):
+    _mock(KLEUREN, status={k: 404 for k in KLEUREN})
+    info = _run(tmp_path)
+    assert info.tegels_mislukt == info.tegels_totaal == 4
+    with rasterio.open(info.pad) as ds:
+        assert ds.read_masks(1).max() == 0
+
+
+@responses.activate
+def test_transient_error_is_retried(tmp_path):
+    url = f"{URL}/2025_ortho25/EPSG:28992/14/100/200.jpeg"
+    responses.add(responses.GET, url, status=503)
+    responses.add(responses.GET, url, body=requests.ConnectionError("x"))
+    responses.add(responses.GET, url, body=jpeg((200, 30, 30)), content_type="image/jpeg")
+    _mock({k: v for k, v in KLEUREN.items() if k != (100, 200)})
+    assert _run(tmp_path).tegels_mislukt == 0
+
+
+@responses.activate
+def test_persistent_failure_retries_then_logs(tmp_path, caplog):
+    url = f"{URL}/2025_ortho25/EPSG:28992/14/100/200.jpeg"
+    for _ in range(3):
+        responses.add(responses.GET, url, status=500)
+    _mock({k: v for k, v in KLEUREN.items() if k != (100, 200)})
+    with caplog.at_level(logging.WARNING):
+        assert _run(tmp_path).tegels_mislukt == 1
+    assert sum(c.request.url == url for c in responses.calls) == 3
+    assert "col=100 row=200" in caplog.text and "HTTP 500" in caplog.text
+
+
+@responses.activate
+def test_404_not_retried(tmp_path):
+    _mock(KLEUREN, status={(100, 200): 404})
+    _run(tmp_path)
+    assert sum(c.request.url.endswith("/100/200.jpeg") for c in responses.calls) == 1
+
+
+@responses.activate
+def test_png_extension_from_formaat(tmp_path):
+    for (c, r), k in KLEUREN.items():
+        buf = io.BytesIO()
+        Image.new("RGB", (256, 256), k).save(buf, "PNG")
+        responses.add(
+            responses.GET, f"{URL}/2025_ortho25/EPSG:28992/14/{c}/{r}.png",
+            body=buf.getvalue(), content_type="image/png",
+        )
+    assert _run(tmp_path, "image/png").tegels_mislukt == 0

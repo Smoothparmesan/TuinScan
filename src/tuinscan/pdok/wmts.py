@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import logging
 import math
+import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -21,6 +23,16 @@ NS = {
 }
 PIXEL_M = 0.00028  # OGC-standaard pixelgrootte
 TIMEOUT = 60
+RETRIES = 2
+BACKOFF = (1, 3)
+LEEG_DREMPEL = 0.995  # aandeel pixels dat 'leeg' moet zijn (JPEG-ruis)
+EXTENSIES = {"image/jpeg": "jpeg", "image/png": "png"}
+
+log = logging.getLogger(__name__)
+
+
+def _slaap(seconden: float) -> None:
+    time.sleep(seconden)
 
 
 @dataclass(frozen=True)
@@ -106,19 +118,44 @@ def tegels_voor_bbox(
     return [(c, r) for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
 
 
-def _haal_tegel(sessie, url, laag, matrixset, m, col, row) -> np.ndarray | None:
-    """(3,h,w) uint8, of None als de tegel mislukt, leeg-wit of leeg-zwart is."""
-    try:
-        resp = sessie.get(f"{url}/{laag}/{matrixset}/{m.id}/{col}/{row}.jpeg", timeout=TIMEOUT)
-        if resp.status_code != 200:
-            return None
-        with Image.open(io.BytesIO(resp.content)) as im:
-            arr = np.asarray(im.convert("RGB"))
-    except (requests.RequestException, OSError):
-        return None
-    if (arr == 255).all() or (arr == 0).all():
-        return None
-    return arr.transpose(2, 0, 1)
+def _is_leeg(arr: np.ndarray) -> bool:
+    """Wit (alle banden >= 250) of zwart (alle banden <= 5) voor >= 99,5 % van de pixels."""
+    wit = (arr >= 250).all(axis=2).mean()
+    zwart = (arr <= 5).all(axis=2).mean()
+    return wit >= LEEG_DREMPEL or zwart >= LEEG_DREMPEL
+
+
+def _haal_tegel(sessie, url, laag, matrixset, m, col, row, ext="jpeg") -> np.ndarray | None:
+    """(3,h,w) uint8, of None als de tegel mislukt of leeg (wit/zwart) is."""
+    tegel_url = f"{url}/{laag}/{matrixset}/{m.id}/{col}/{row}.{ext}"
+    reden = ""
+    for poging in range(RETRIES + 1):
+        try:
+            resp = sessie.get(tegel_url, timeout=TIMEOUT)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            reden = type(exc).__name__
+        except requests.RequestException as exc:
+            reden = type(exc).__name__
+            break
+        else:
+            if resp.status_code == 200:
+                try:
+                    with Image.open(io.BytesIO(resp.content)) as im:
+                        arr = np.asarray(im.convert("RGB"))
+                except OSError:
+                    reden = "geen geldige afbeelding"
+                    break
+                if _is_leeg(arr):
+                    reden = "lege (witte/zwarte) tegel"
+                    break
+                return arr.transpose(2, 0, 1)
+            reden = f"HTTP {resp.status_code}"
+            if resp.status_code != 429 and resp.status_code < 500:
+                break
+        if poging < RETRIES:
+            _slaap(BACKOFF[poging])
+    log.warning("tegel mislukt: laag=%s col=%s row=%s reden=%s", laag, col, row, reden)
+    return None
 
 
 def download_mozaiek(
@@ -132,6 +169,7 @@ def download_mozaiek(
     sessie: requests.Session,
     workers: int,
 ) -> MozaiekInfo:
+    ext = EXTENSIES.get(formaat, "jpeg")
     tegels = tegels_voor_bbox(matrix, bbox)
     if not tegels:
         raise ValueError("bbox valt buiten de tegelmatrix")
@@ -143,7 +181,7 @@ def download_mozaiek(
     mask = np.zeros(data.shape[1:], dtype=np.uint8)
 
     def werk(cr: tuple[int, int]):
-        return cr, _haal_tegel(sessie, url, laag, matrixset, matrix, *cr)
+        return cr, _haal_tegel(sessie, url, laag, matrixset, matrix, *cr, ext)
 
     mislukt = 0
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
