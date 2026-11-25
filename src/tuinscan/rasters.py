@@ -171,12 +171,20 @@ def _ndsm(dtm_pad, dsm_pad, transform, vorm) -> Raster | None:
 
 
 def _lokaal(vlakken, gebied: BaseGeometry) -> list[BaseGeometry]:
-    """Geometrieën uit `vlakken` (GeoDataFrame/GeoSeries) die `gebied` raken, via de sindex."""
-    if vlakken is None or len(vlakken) == 0:
+    """Geometrieën uit `vlakken` die `gebied` raken; GeoDataFrame/GeoSeries via de sindex.
+
+    Zo wordt per tuin alleen de directe omgeving bewerkt, nooit de hele wijk.
+    """
+    if vlakken is None:
         return []
-    geoms = getattr(vlakken, "geometry", vlakken)
-    idx = geoms.sindex.query(gebied, predicate="intersects")
-    return [g for g in geoms.iloc[idx] if g is not None and not g.is_empty]
+    if isinstance(vlakken, BaseGeometry):
+        kandidaten = [vlakken]
+    elif hasattr(vlakken, "sindex"):
+        geoms = getattr(vlakken, "geometry", vlakken)
+        kandidaten = list(geoms.iloc[geoms.sindex.query(gebied, predicate="intersects")])
+    else:
+        kandidaten = [g for g in vlakken if g is not None and g.intersects(gebied)]
+    return [g for g in kandidaten if g is not None and not g.is_empty]
 
 
 def _pand_afstand(panden, tuin_masker: np.ndarray, transform) -> np.ndarray:
@@ -251,12 +259,16 @@ def _alleen_vlakken(geom: BaseGeometry) -> BaseGeometry | None:
 
 
 def overhang_zone(tuin, panden, bgt_voetpad, bgt_groen, buffer_m: float):
-    """(tuin.buffer − tuin − panden) ∩ (voetpad ∪ openbaar groen); None als leeg."""
-    publiek = _unie([g for g in (_unie(bgt_voetpad), _unie(bgt_groen)) if g is not None])
+    """(tuin.buffer − tuin − panden) ∩ (voetpad ∪ openbaar groen); None als leeg.
+
+    Alleen vlakken die de buffer raken tellen mee (sindex), zodat de kosten per tuin niet
+    met de grootte van het werkgebied groeien.
+    """
+    zone = shapely.difference(tuin.buffer(buffer_m), tuin)
+    publiek = _unie(_lokaal(bgt_voetpad, zone) + _lokaal(bgt_groen, zone))
     if publiek is None:
         return None
-    zone = shapely.difference(tuin.buffer(buffer_m), tuin)
-    gebouwd = _unie(panden)
+    gebouwd = _unie(_lokaal(panden, zone))
     if gebouwd is not None:
         zone = shapely.difference(zone, gebouwd)
     return _alleen_vlakken(shapely.intersection(zone, publiek))

@@ -180,3 +180,85 @@ def test_empty_vector_roundtrip(tmp_path):
     pad = tmp_path / "cache" / "vector" / "x.gpkg"
     schrijf_vector(leeg, pad)
     assert len(lees_vector(pad)) == 0
+
+
+def _manifest(mp):
+    from tuinscan.pdok.cache import Manifest
+
+    return Manifest(mp.cache / "manifest.json")
+
+
+def test_manifest_records_layer_zoom_year_and_ahn_version(tmp_path, aanroepen):
+    cfg, mp = maak_cfg(tmp_path)
+    voer_download_uit(cfg, mp, False)
+    rec = _manifest(mp).lees("zomer_nu")
+    assert (rec["laag"], rec["zoom"], rec["jaar"]) == ("2025_ortho25", "14", 2025)
+    assert _manifest(mp).lees("ahn_dsm")["versie"] == cfg.ahn.versie
+    assert _manifest(mp).lees("bag_pand")["collectie"] == "pand"
+
+
+@pytest.mark.parametrize(
+    "wijzig, opnieuw",
+    [
+        (lambda d: d["luchtfoto"]["lagen"]["zomer_nu"].update(laag="2024_ortho25"), "zomer_nu"),
+        (lambda d: d["luchtfoto"]["lagen"]["cir_vorig"].update(zoom="15"), "cir_vorig"),
+        (lambda d: d["luchtfoto"].update(rgb_wmts="https://elders/wmts"), "zomer_nu"),
+        (lambda d: d["ahn"].update(dsm_index="https://elders/dsm.json"), "ahn_dsm"),
+        (lambda d: d["pdok"]["collecties"].update(pand="pand2"), "bag_pand"),
+    ],
+)
+def test_changed_config_refetches_stale_cache(tmp_path, aanroepen, wijzig, opnieuw):
+    cfg, mp = maak_cfg(tmp_path)
+    voer_download_uit(cfg, mp, False)
+    cfg2, mp2 = maak_cfg(tmp_path, wijzig)
+    r = voer_download_uit(cfg2, mp2, False)
+    assert opnieuw in r.opgehaald
+    assert "bag_vbo" in r.overgeslagen  # de rest blijft uit de cache
+
+
+def test_changed_ahn_index_url_refreshes_index(tmp_path, aanroepen, monkeypatch):
+    vernieuwd = []
+    index = gpd.GeoDataFrame({"url": ["k.tif"]}, geometry=[box(0, 0, 1000, 1000)], crs=28992)
+
+    def laad(url, doel, sessie, vernieuw):
+        vernieuwd.append((url, vernieuw))
+        return index
+
+    monkeypatch.setattr(dl, "_laad_index", laad)
+    cfg, mp = maak_cfg(tmp_path)
+    voer_download_uit(cfg, mp, False)
+    vernieuwd.clear()
+    cfg2, mp2 = maak_cfg(tmp_path, lambda d: d["ahn"].update(dtm_index="https://elders/dtm.json"))
+    voer_download_uit(cfg2, mp2, False)
+    assert vernieuwd == [("https://elders/dtm.json", True)]
+
+
+def test_old_manifest_without_zoom_is_refetched(tmp_path, aanroepen):
+    import json
+
+    cfg, mp = maak_cfg(tmp_path)
+    voer_download_uit(cfg, mp, False)
+    pad = mp.cache / "manifest.json"
+    data = json.loads(pad.read_text(encoding="utf-8"))
+    del data["winter_nu"]["zoom"]
+    pad.write_text(json.dumps(data), encoding="utf-8")
+    assert voer_download_uit(cfg, mp, False).opgehaald == ["winter_nu"]
+
+
+def test_herkomst_from_manifest_not_config(tmp_path, aanroepen):
+    from tuinscan.download import herkomst_uit_cache
+
+    cfg, mp = maak_cfg(tmp_path)
+    voer_download_uit(cfg, mp, False)
+    for k in ("zomer_nu", "zomer_vorig", "winter_nu", "ahn_dsm"):
+        (mp.cache / "raster" / f"{k}.tif").write_bytes(b"x")
+    cfg2, _ = maak_cfg(tmp_path, lambda d: d["luchtfoto"]["lagen"]["zomer_nu"].update(
+        laag="2026_ortho25", jaar=2026))  # fmt: skip
+    h = herkomst_uit_cache(cfg2, mp)
+    assert h["zomer_jaar"] == 2025 and h["zomer_vorig_jaar"] == 2024  # wat er echt ligt
+    assert h["winter_jaar"] == 2026 and h["ahn_versie"] == cfg.ahn.versie
+    assert h["lagen"]["zomer_nu"] == {"laag": "2025_ortho25", "jaar": 2025, "zoom": "14"}
+    assert h["ahn_kaartbladen"] == ["k"]
+    assert any("zomer_nu" in m and "2026_ortho25" in m for m in h["afwijkingen"])
+    (mp.cache / "raster" / "zomer_vorig.tif").unlink()
+    assert herkomst_uit_cache(cfg, mp)["zomer_vorig_jaar"] is None

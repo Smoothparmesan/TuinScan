@@ -15,7 +15,7 @@ import pandas as pd
 
 from tuinscan import tobias
 from tuinscan.config import Config, parameterset_hash
-from tuinscan.download import lees_vector
+from tuinscan.download import herkomst_uit_cache, lees_vector
 from tuinscan.fouten import Foutenlijst
 from tuinscan.koppeling import href_ids, koppel, koppelpercentage
 from tuinscan.mappen import Mappen
@@ -74,6 +74,18 @@ def _schrijf_ronde_json(cfg: Config, mappen: Mappen) -> None:
     (mappen.ronde_dir / "ronde.json").write_text(
         json.dumps(ronde, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+
+def _werk_ronde_json_bij(cfg: Config, mappen: Mappen, herkomst: dict) -> None:
+    """Zet herkomst (lagen, AHN-versie en -kaartbladen) en de parameterset van de score."""
+    pad = mappen.ronde_dir / "ronde.json"
+    try:
+        ronde = json.loads(pad.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ronde = {}
+    ronde["parameterset"] = parameterset_hash(cfg)
+    ronde["herkomst"] = {k: herkomst[k] for k in ("lagen", "ahn_versie", "ahn_kaartbladen")}
+    pad.write_text(json.dumps(ronde, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def stap_tuinen(cfg: Config, mappen: Mappen) -> TuinenRapport:
@@ -202,6 +214,10 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
     )
 
     bronnen = bronnen_uit_cache(mappen)
+    herkomst = herkomst_uit_cache(cfg, mappen)
+    for melding in herkomst["afwijkingen"]:
+        print(f"Let op: {melding}")
+        log.info(melding)
     s = cfg.signalen
     voetpad = wegdelen[wegdelen[velden["wegdeel_functie"]].isin(cfg.pdok.voetpad_functies)]
     groen = begroeid[begroeid[velden["begroeid_fysiek"]].isin(cfg.pdok.openbaar_groen_fysiek)]
@@ -226,7 +242,6 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
             fouten.voeg_toe(vhe, SCORE_STAP, f"score mislukt: {e}")
             continue
         eerste = delen.iloc[0]
-        lagen = cfg.luchtfoto.lagen
         reden = uitkomst.redenen + [None] * 2
         vhe_rijen.append({
             "vhe_nummer": vhe, "adres": eerste["adres"], "wijk": eerste["wijk"],
@@ -235,10 +250,9 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
             **{f"bijdrage_{k}": b for k, b in uitkomst.bijdragen.items()},
             "reden_1": reden[0], "reden_2": reden[1],
             "reden_codes": uitkomst.reden_codes, "ontbrekend": uitkomst.ontbrekend,
-            "zomer_jaar": lagen.get("zomer_nu", {}).get("jaar"),
-            "zomer_vorig_jaar": lagen.get("zomer_vorig", {}).get("jaar"),
-            "winter_jaar": lagen.get("winter_nu", {}).get("jaar"),
-            "ahn_versie": cfg.ahn.versie, "parameterset": parameterset_hash(cfg),
+            **{k: herkomst[k] for k in ("zomer_jaar", "zomer_vorig_jaar", "winter_jaar",
+                                        "ahn_versie")},
+            "parameterset": parameterset_hash(cfg),
         })  # fmt: skip
         scores_geom.append(delen.geometry.union_all())
 
@@ -270,6 +284,7 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
     gpd.GeoDataFrame(laag, geometry=scores_geom, crs=28992).to_file(
         gpkg, layer="scores", driver="GPKG", promote_to_multi=True, geometry_type="MultiPolygon"
     )
+    _werk_ronde_json_bij(cfg, mappen, herkomst)
     print(f"Score berekend voor {len(scores)} VHE's; {len(fouten.regels)} regels in foutenlijst")
     return scores
 
@@ -298,7 +313,14 @@ def stap_rapport(cfg: Config, mappen: Mappen) -> Path:
                 uitsneden[vhe] = maak_uitsneden(vhe, geom[vhe], bronnen, rd)
             except Exception:  # geen beeld is geen reden om het rapport te laten falen (N06)
                 log.exception("uitsneden VHE %s mislukt", vhe)
-    html = render_rapport(scores, uitsneden, ronde=rd.name, n_tuinen=len(tuinen), fouten=fouten)
+    try:
+        bladen = json.loads((rd / "ronde.json").read_text(encoding="utf-8"))["herkomst"][
+            "ahn_kaartbladen"
+        ]
+    except (OSError, ValueError, KeyError, TypeError):
+        bladen = []
+    html = render_rapport(scores, uitsneden, ronde=rd.name, n_tuinen=len(tuinen), fouten=fouten,
+                          kaartbladen=bladen)  # fmt: skip
     pad = rd / "rapport.html"
     pad.write_text(html, encoding="utf-8")
     print(f"Rapport met {len(scores)} VHE's geschreven naar {pad}")

@@ -78,3 +78,8 @@ def test_foutenlijst_summary_without_addresses(miniwijk):
 def test_lean_caption_under_thumbnails(miniwijk):
     html, _ = _bouw(miniwijk)
     assert "zomerfoto niet loodrecht; daken kunnen meters over de tuin vallen" in html
+
+
+def test_report_lists_ahn_kaartbladen(miniwijk):
+    html, _ = _bouw(miniwijk)
+    assert "AHN-kaartbladen: synthetisch" in html

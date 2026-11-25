@@ -90,13 +90,14 @@ def _laad_index(url: str, doel: Path, sessie: requests.Session, vernieuw: bool) 
     return gpd.read_file(doel)
 
 
-def _ahn_bronnen(cfg: Config) -> list[tuple[str, str]]:
-    """(sleutel, index-url) voor AHN-rasters."""
-    bronnen = [("ahn_dtm", cfg.ahn.dtm_index), ("ahn_dsm", cfg.ahn.dsm_index)]
-    if cfg.ahn.vorige:
+def _ahn_bronnen(cfg: Config) -> list[tuple[str, str, str]]:
+    """(sleutel, index-url, versie) voor AHN-rasters."""
+    a = cfg.ahn
+    bronnen = [("ahn_dtm", a.dtm_index, a.versie), ("ahn_dsm", a.dsm_index, a.versie)]
+    if a.vorige:
         bronnen += [
-            ("ahn_vorig_dtm", cfg.ahn.vorige["dtm_index"]),
-            ("ahn_vorig_dsm", cfg.ahn.vorige["dsm_index"]),
+            ("ahn_vorig_dtm", a.vorige["dtm_index"], a.vorige["versie"]),
+            ("ahn_vorig_dsm", a.vorige["dsm_index"], a.vorige["versie"]),
         ]
     return bronnen
 
@@ -107,19 +108,26 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
     manifest = Manifest(manifest_pad(mappen.cache))
     sessie = requests.Session()
 
-    def klaar(sleutel: str, pad: Path) -> bool:
-        if not vernieuw and pad.exists() and manifest.heeft(sleutel, bbox):
-            if manifest.lees(sleutel).get("status") == "leeg":
-                return False
-            rapport.overgeslagen.append(sleutel)
-            return True
-        return False
+    def klaar(sleutel: str, pad: Path, verwacht: dict) -> bool:
+        """Cache bruikbaar: zelfde bbox, niet leeg en dezelfde bron (url, laag, zoom, ...)."""
+        if vernieuw or not pad.exists() or not manifest.heeft(sleutel, bbox):
+            return False
+        rec = manifest.lees(sleutel)
+        if rec.get("status") == "leeg":
+            return False
+        anders = {k: v for k, v in verwacht.items() if rec.get(k) != v}
+        if anders:
+            verschil = ", ".join(f"{k} {rec.get(k)!r} -> {v!r}" for k, v in anders.items())
+            log.info("%s: cache past niet bij de config (%s); opnieuw ophalen", sleutel, verschil)
+            return False
+        rapport.overgeslagen.append(sleutel)
+        return True
 
     for sleutel, (url_attr, coll) in VECTOR_SLEUTELS.items():
         pad = vector_pad(mappen.cache, sleutel)
-        if klaar(sleutel, pad):
-            continue
         url = getattr(cfg.pdok, url_attr)
+        if klaar(sleutel, pad, {"url": url, "collectie": cfg.pdok.collecties[coll]}):
+            continue
         gdf = haal_features(url, cfg.pdok.collecties[coll], bbox, sessie)
         kolommen = schrijf_vector(gdf, pad)
         manifest.registreer(
@@ -135,9 +143,11 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
             rapport.niet_geconfigureerd.append(sleutel)
             continue
         pad = raster_pad(mappen.cache, sleutel)
-        if klaar(sleutel, pad):
-            continue
         url = cfg.luchtfoto.cir_wmts if sleutel.startswith("cir_") else cfg.luchtfoto.rgb_wmts
+        bron = {"url": url, "laag": spec["laag"], "zoom": str(spec.get("zoom")),
+                "jaar": spec.get("jaar")}  # fmt: skip
+        if klaar(sleutel, pad, bron):
+            continue
         try:
             if url not in caps:
                 caps[url] = haal_capabilities(url, cfg.luchtfoto.matrixset, sessie)
@@ -154,8 +164,8 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
             rapport.mislukt[sleutel] = str(e)
             log.warning("%s: mislukt (%s)", sleutel, e)
             continue
-        extra = {"laag": spec["laag"], "tegels_totaal": info.tegels_totaal,
-                 "tegels_mislukt": info.tegels_mislukt}
+        extra = {**bron, "tegels_totaal": info.tegels_totaal,
+                 "tegels_mislukt": info.tegels_mislukt}  # fmt: skip
         if info.tegels_totaal and info.tegels_mislukt == info.tegels_totaal:
             extra["status"] = "leeg"
             rapport.leeg.append(sleutel)
@@ -164,13 +174,14 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
         manifest.registreer(sleutel, url, bbox, extra)
         rapport.opgehaald.append(sleutel)
 
-    for sleutel, index_url in _ahn_bronnen(cfg):
+    for sleutel, index_url, versie in _ahn_bronnen(cfg):
         pad = raster_pad(mappen.cache, sleutel)
-        if klaar(sleutel, pad):
+        if klaar(sleutel, pad, {"url": index_url, "versie": versie}):
             continue
         try:
+            # ook de index opnieuw: een gecachte index hoort mogelijk bij een andere URL
             index = _laad_index(
-                index_url, mappen.cache / "raster" / f"{sleutel}_index.json", sessie, vernieuw
+                index_url, mappen.cache / "raster" / f"{sleutel}_index.json", sessie, True
             )
             bladen = kaartbladen_voor_bbox(index, cfg.ahn.url_veld, bbox)
             if not bladen:
@@ -180,9 +191,54 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
             rapport.mislukt[sleutel] = str(e)
             log.warning("%s: mislukt (%s)", sleutel, e)
             continue
-        manifest.registreer(sleutel, index_url, bbox, {"kaartbladen": bladen})
+        manifest.registreer(sleutel, index_url, bbox, {"kaartbladen": bladen, "versie": versie})
         rapport.opgehaald.append(sleutel)
     return rapport
+
+
+def _bruikbaar(mappen: Mappen, sleutel: str, rec: dict | None) -> bool:
+    return (rec is not None and rec.get("status") != "leeg"
+            and raster_pad(mappen.cache, sleutel).exists())  # fmt: skip
+
+
+def herkomst_uit_cache(cfg: Config, mappen: Mappen) -> dict:
+    """Herkomst van de rasters die echt in de cache liggen (manifest), niet uit de config.
+
+    Ontbreekt een veld in een oud manifest, dan geldt de config-waarde alleen als de laag
+    (of AHN-index-URL) gelijk is. `afwijkingen` noemt lagen waar cache en config verschillen.
+    """
+    data = Manifest(manifest_pad(mappen.cache))._laad()
+    lagen, afwijkingen = {}, []
+    for sleutel in LUCHTFOTO_SLEUTELS:
+        rec = data.get(sleutel)
+        if not _bruikbaar(mappen, sleutel, rec):
+            continue
+        spec = cfg.luchtfoto.lagen.get(sleutel) or {}
+        gelijk = rec.get("laag") == spec.get("laag")
+        jaar = rec.get("jaar", spec.get("jaar") if gelijk else None)
+        zoom = rec.get("zoom", str(spec.get("zoom")) if gelijk else None)
+        lagen[sleutel] = {"laag": rec.get("laag"), "jaar": jaar, "zoom": zoom}
+        if not gelijk or (spec.get("jaar") is not None and jaar != spec.get("jaar")):
+            afwijkingen.append(
+                f"{sleutel}: cache bevat {rec.get('laag')} ({jaar}), config zegt "
+                f"{spec.get('laag')} ({spec.get('jaar')}); draai 'tuinscan download'"
+            )
+    versies, bladen = [], []
+    for sleutel, index_url, versie in _ahn_bronnen(cfg)[:2]:
+        rec = data.get(sleutel)
+        if not _bruikbaar(mappen, sleutel, rec):
+            continue
+        versies.append(rec.get("versie", versie if rec.get("url") == index_url else None))
+        bladen += [Path(str(b)).stem for b in rec.get("kaartbladen", [])]
+    return {
+        "zomer_jaar": lagen.get("zomer_nu", {}).get("jaar"),
+        "zomer_vorig_jaar": lagen.get("zomer_vorig", {}).get("jaar"),
+        "winter_jaar": lagen.get("winter_nu", {}).get("jaar"),
+        "ahn_versie": next((v for v in versies if v), None) if len(versies) == 2 else None,
+        "lagen": lagen,
+        "ahn_kaartbladen": sorted(set(bladen)),
+        "afwijkingen": afwijkingen,
+    }
 
 
 def druk_lagen_af(cfg: Config) -> None:

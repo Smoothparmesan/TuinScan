@@ -252,3 +252,32 @@ def test_pand_afstand_for_tuin_pixels(miniwijk):
     assert tr.pand_afstand[r, c] == pytest.approx(7.125, abs=0.01)
     assert np.isinf(tr.pand_afstand[~tr.tuin_masker]).all()  # alleen tuinpixels nodig
     assert bouw_tuinrasters(tuin, None, bronnen, RES).pand_afstand is None
+
+
+def test_overhang_zone_unions_only_local_features(miniwijk, monkeypatch):
+    import geopandas as gpd
+    import pandas as pd
+    import shapely
+
+    mw = miniwijk
+    voetpad = mw.wegdelen[mw.wegdelen["functie"] == "voetpad"]
+    ver = gpd.GeoDataFrame(  # 500 verre panden/voetpaden: mogen de bewerking niet vertragen
+        {"functie": ["voetpad"] * 500},
+        geometry=[rd_box((1000 + 3 * i, 1000, 1001 + 3 * i, 1001)) for i in range(500)],
+        crs=28992,
+    )
+    veel_panden = pd.concat([mw.panden, ver], ignore_index=True)
+    veel_voetpad = pd.concat([voetpad, ver], ignore_index=True)
+    tuin = rd_box(R2_VOOR)
+    verwacht = overhang_zone(tuin, mw.panden, voetpad, mw.begroeid, 1.5)
+    groottes = []
+    echt = shapely.union_all
+
+    def spion(geoms, *a, **k):
+        groottes.append(len(geoms) if hasattr(geoms, "__len__") else 1)
+        return echt(geoms, *a, **k)
+
+    monkeypatch.setattr(shapely, "union_all", spion)
+    zone = overhang_zone(tuin, veel_panden, veel_voetpad, mw.begroeid, 1.5)
+    assert zone.symmetric_difference(verwacht).area < 1e-6
+    assert max(groottes, default=0) < 10

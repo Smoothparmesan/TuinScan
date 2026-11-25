@@ -100,7 +100,8 @@ footer ul { margin: 4px 0; padding-left: 20px; }
   {% if herkomst %}
   <p class="meta">Herkomst: zomerfoto {{ herkomst.zomer_jaar }} (vorig jaar {{ herkomst.zomer_vorig_jaar }}),
     winterfoto {{ herkomst.winter_jaar }}, hoogtedata: {{ herkomst.ahn_versie }},
-    parameterset <b>{{ herkomst.parameterset }}</b></p>
+    parameterset <b>{{ herkomst.parameterset }}</b>{% if kaartbladen %};
+    AHN-kaartbladen: {{ kaartbladen|join(", ") }}{% endif %}</p>
   {% endif %}
   <div class="tellers">
     <div class="teller"><b>{{ n_vhe }}</b><span>VHE's gescoord</span></div>

@@ -61,6 +61,7 @@ def render_rapport(
     ronde: str,
     n_tuinen: int,
     fouten: pd.DataFrame,
+    kaartbladen: list[str] | None = None,
 ) -> str:
     rijen = bouw_rijen(scores, uitsneden)
     wijken: dict[str, list[dict]] = {}
@@ -80,4 +81,5 @@ def render_rapport(
     return env.get_template("rapport.html.j2").render(
         banner=BANNER, ronde=ronde, herkomst=herkomst, wijken=wijken, n_vhe=len(scores),
         n_tuinen=n_tuinen, n_fouten=len(fouten), per_stap=per_stap,
+        kaartbladen=list(kaartbladen or []),
     )  # fmt: skip

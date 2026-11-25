@@ -260,16 +260,18 @@ def _schrijf_rasters(cfg: Config, mappen: Mappen, manifest: Manifest, bbox) -> d
         pad = raster_pad(mappen.cache, sleutel)
         _schrijf_luchtfoto(pad, sleutel, bbox)
         url = cfg.luchtfoto.cir_wmts if sleutel.startswith("cir_") else cfg.luchtfoto.rgb_wmts
+        spec = cfg.luchtfoto.lagen[sleutel]
         manifest.registreer(
-            sleutel, url, bbox, {"laag": cfg.luchtfoto.lagen[sleutel]["laag"],
-                                 "tegels_totaal": 1, "tegels_mislukt": 0},
+            sleutel, url, bbox, {"laag": spec["laag"], "zoom": str(spec["zoom"]),
+                                 "jaar": spec["jaar"], "tegels_totaal": 1, "tegels_mislukt": 0},
         )  # fmt: skip
         paden[sleutel] = pad
     for sleutel in AHN_SLEUTELS:
         pad = raster_pad(mappen.cache, sleutel)
         _schrijf_ahn(pad, sleutel, bbox)
         url = cfg.ahn.dtm_index if sleutel == "ahn_dtm" else cfg.ahn.dsm_index
-        manifest.registreer(sleutel, url, bbox, {"kaartbladen": ["synthetisch"]})
+        manifest.registreer(sleutel, url, bbox, {"kaartbladen": ["synthetisch"],
+                                                 "versie": cfg.ahn.versie})  # fmt: skip
         paden[sleutel] = pad
     return paden
 

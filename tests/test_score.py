@@ -158,3 +158,21 @@ def test_nan_signal_counts_as_missing(miniwijk):
     u = bereken_score(sig, miniwijk.cfg)
     assert u.score == 75.0 and u.ontbrekend == ["S1"]
     assert aggregeer_delen([(1.0, {"S1": float("nan")})])["S1"] is None
+
+
+def test_provenance_from_cache_manifest_and_ronde_json(miniwijk, capsys):
+    import json
+
+    mw = miniwijk
+    pad = mw.mappen.cache / "manifest.json"
+    data = json.loads(pad.read_text(encoding="utf-8"))
+    data["zomer_nu"].update(laag="2023_ortho25", jaar=2023)  # oude download, config zegt 2025
+    pad.write_text(json.dumps(data), encoding="utf-8")
+    stap_tuinen(mw.cfg, mw.mappen)
+    sc = stap_score(mw.cfg, mw.mappen)
+    assert (sc["zomer_jaar"] == 2023).all()
+    assert "zomer_nu: cache bevat 2023_ortho25" in capsys.readouterr().out  # cache != config
+    ronde = json.loads((mw.mappen.ronde_dir / "ronde.json").read_text(encoding="utf-8"))
+    assert ronde["herkomst"]["lagen"]["zomer_nu"]["laag"] == "2023_ortho25"
+    assert ronde["herkomst"]["ahn_kaartbladen"] == ["synthetisch"]
+    assert ronde["parameterset"] == parameterset_hash(mw.cfg)
