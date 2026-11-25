@@ -43,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigFout, OneDriveFout) as e:
         print(f"Fout: {e}", file=sys.stderr)
         return 1
+    if args.stap == "inspecteer":
+        from tuinscan.inspecteer import inspecteer
+
+        return inspecteer(cfg, mappen)
     print(f"Stap '{args.stap}': nog niet beschikbaar")
     return 2
 
