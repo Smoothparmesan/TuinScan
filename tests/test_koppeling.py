@@ -1,10 +1,12 @@
+import numpy as np
 import pandas as pd
 import pytest
 
 from miniwijk import PAND_ITEMS
+from tuinscan import koppeling
 from tuinscan.download import VECTOR_SLEUTELS
 from tuinscan.fouten import Foutenlijst
-from tuinscan.koppeling import koppel, koppelpercentage
+from tuinscan.koppeling import DUBBEL, NIET_GEVONDEN, koppel, koppelpercentage
 from tuinscan.pdok.cache import Manifest
 from tuinscan.tobias import BAG_HINT
 
@@ -160,3 +162,45 @@ def test_empty_vhes(miniwijk):
 @pytest.mark.parametrize("n,k,verwacht", [(4, 3, 75.0), (0, 0, 0.0), (3, 3, 100.0)])
 def test_koppelpercentage(n, k, verwacht):
     assert koppelpercentage(n, k) == verwacht
+
+
+def test_duplicate_of_failed_first_vhe_is_not_dubbel(miniwijk, monkeypatch):
+    mw = miniwijk
+    bag = "0363010000099991"
+    vhes = pd.concat([extra(mw, "998", bag), extra(mw, "999", bag).iloc[[-1]]], ignore_index=True)
+    r, f = run(mw, vhes=vhes)
+    assert [v for v, _, _ in f.regels] == ["998", "999"]
+    assert all(NIET_GEVONDEN in reden and DUBBEL not in reden for _, _, reden in f.regels)
+
+    echte_pand = koppeling._Koppelaar.pand
+    aanroepen = []
+
+    def eerste_faalt(self, vbo_rij):
+        aanroepen.append(1)
+        return None if len(aanroepen) == 1 else echte_pand(self, vbo_rij)
+
+    monkeypatch.setattr(koppeling._Koppelaar, "pand", eerste_faalt)
+    r, f = run(mw, vhes=extra(mw, "999", mw.vbo_ids["R1"]))
+    assert len(r) == 4 and "999" in set(r["vhe_nummer"])
+    assert f.regels == [(mw.vhe_nummers["R1"], "koppeling", f.regels[0][2])]
+    assert "geen pand" in f.regels[0][2]
+
+
+@pytest.mark.parametrize("maak", [np.array, pd.Series])
+def test_href_ids_accepts_array_like(maak):
+    h = maak([PAND_ITEMS + "abc", PAND_ITEMS + "def/"])
+    assert koppeling._href_ids(h) == ["abc", "def"]
+    assert koppeling._href_ids(maak([], dtype=object)) == []
+    assert koppeling._href_ids(np.array(PAND_ITEMS + "ghi")) == ["ghi"]  # 0-d array
+
+
+def test_pand_via_numpy_href(miniwijk):
+    mw = miniwijk
+    vbo = mw.vbo.copy()
+    i = vbo.index[vbo["identificatie"] == mw.vbo_ids["V"]][0]
+    hrefs = [np.array(h) for h in vbo["pand.href"]]
+    hrefs[vbo.index.get_loc(i)] = np.array([PAND_ITEMS + mw.pand_feature_ids["schuur"]])
+    vbo["pand.href"] = pd.Series(hrefs, index=vbo.index, dtype=object)
+    r, f = run(mw, vbo=vbo)
+    assert f.aantal == 0
+    assert per_vhe(r).loc[mw.vhe_nummers["V"], "pand_id"] == mw.pand_ids["schuur"]

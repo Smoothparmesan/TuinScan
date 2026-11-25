@@ -27,6 +27,8 @@ def _href_ids(waarde: object) -> list[str]:
     """Feature-id's (laatste URL-segment) uit een `pand.href`-waarde."""
     if waarde is None or (isinstance(waarde, float) and waarde != waarde):
         return []
+    if not isinstance(waarde, str) and hasattr(waarde, "tolist"):  # numpy-array / Series
+        waarde = waarde.tolist()
     if isinstance(waarde, str):
         s = waarde.strip()
         if s.startswith("["):
@@ -106,7 +108,6 @@ def koppel(
             if bag in gezien:
                 fouten.voeg_toe(vhe, STAP, f"{DUBBEL} {bag} (VHE {gezien[bag]} behouden)")
                 continue
-            gezien[bag] = vhe
             i = k.vbo_per_id.get(bag)
             if i is None:
                 reden = f"{NIET_GEVONDEN} ({bag})"
@@ -131,6 +132,7 @@ def koppel(
             log.exception("koppeling VHE %s mislukt", vhe)
             fouten.voeg_toe(vhe, STAP, f"koppeling mislukt: {e}")
             continue
+        gezien[bag] = vhe  # pas na een geslaagde koppeling: eerste gekoppelde VHE wint
         rijen.append({
             **rij,
             "pand_id": str(panden.at[p, velden["pand_id"]]),
