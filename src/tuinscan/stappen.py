@@ -16,7 +16,7 @@ from tuinscan.fouten import Foutenlijst
 from tuinscan.koppeling import koppel, koppelpercentage
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.cache import vector_pad
-from tuinscan.tuinvlak import STAP, maak_tuinen, pas_correcties_toe
+from tuinscan.tuinvlak import STAP, maak_geldig, maak_tuinen, pas_correcties_toe
 
 log = logging.getLogger(__name__)
 
@@ -43,8 +43,10 @@ def _lees_cache(mappen: Mappen, sleutel: str) -> gpd.GeoDataFrame:
         raise StapFout(f"{pad} ontbreekt; draai eerst 'tuinscan download'")
     gdf = lees_vector(pad)
     if gdf.crs is None:
-        return gdf.set_crs(28992)
-    return gdf if gdf.crs.to_epsg() == 28992 else gdf.to_crs(28992)
+        gdf = gdf.set_crs(28992)
+    elif gdf.crs.to_epsg() != 28992:
+        gdf = gdf.to_crs(28992)
+    return maak_geldig(gdf)  # één keer, vóór koppeling en tuinvlak
 
 
 def _pct(p: float) -> str:
@@ -74,7 +76,7 @@ def stap_tuinen(cfg: Config, mappen: Mappen) -> TuinenRapport:
     )
     gekoppeld = koppel(vhes, vbo, panden, percelen, cfg.pdok.velden, fouten)
     tuinen = maak_tuinen(gekoppeld, vbo, panden, percelen, wegdelen, cfg, fouten)
-    tuinen = pas_correcties_toe(tuinen, mappen.invoer / CORRECTIES)
+    tuinen = pas_correcties_toe(tuinen, mappen.invoer / CORRECTIES, vhes)
     tuinen = tuinen[tuinen["deel"].isin(cfg.tuin.delen)].copy()
     tuinen["oppervlak_m2"] = tuinen.geometry.area.round(2)
 
