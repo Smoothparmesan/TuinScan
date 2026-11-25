@@ -37,7 +37,7 @@ ALIASSEN: dict[str, tuple[str, ...]] = {
         "rentalobject", "rentalobjectid", "objectnummer",
     ),  # fmt: skip
     "wijk": ("wijk", "buurt", "district", "wijknaam"),
-    "complex": ("complex", "complexnummer", "cluster", "bouwblok"),
+    "complex": ("complex", "complexnummer", "complexnr", "cluster", "bouwblok"),
     "woningtype": ("woningtype", "type", "objecttype", "woningsoort", "typewoning"),
     "eigen_tuin": ("tuin", "eigentuin", "heefttuin"),
     "standaardberging": ("berging", "standaardberging"),

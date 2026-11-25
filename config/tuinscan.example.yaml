@@ -15,6 +15,12 @@ pdok:
     vbo_id: identificatie
     vbo_pand_href: pand.href          # list of URLs; last segment = pand feature id
     vbo_gebruiksdoel: gebruiksdoel
+    vbo_straat: openbare_ruimte_naam   # address fields: only for `tuinscan voorbeeld`
+    vbo_huisnummer: huisnummer
+    vbo_huisletter: huisletter
+    vbo_toevoeging: toevoeging
+    vbo_postcode: postcode
+    vbo_plaats: woonplaats_naam
     woonfunctie: woonfunctie
     pand_id: identificatie
     pand_aantal_vbo: aantal_verblijfsobjecten

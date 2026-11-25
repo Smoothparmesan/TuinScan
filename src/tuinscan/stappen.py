@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -345,3 +347,75 @@ def stap_terugkoppeling_lees(cfg: Config, mappen: Mappen, bestand: str | None = 
     uit = rd / "kwaliteit.csv"
     schrijf_kwaliteit(kwaliteit(scores, terug), cfg.terugkoppeling.top_n, uit)
     return uit
+
+
+def _verwijder(pad: Path, binnen: list[Path]) -> bool:
+    """Verwijder een bestand of map, maar nooit iets buiten de drie databoomuitvoer-mappen."""
+    pad = pad.resolve()
+    assert any(pad.is_relative_to(b.resolve()) and pad != b.resolve() for b in binnen), (
+        f"{pad} ligt niet in een databoom-map; niet verwijderd"
+    )
+    if pad.is_dir():
+        shutil.rmtree(pad)
+    elif pad.exists():
+        pad.unlink()
+    else:
+        return False
+    return True
+
+
+def stap_opruimen(
+    cfg: Config, mappen: Mappen, bevestiging: str, bewaar_correcties: bool = False
+) -> list[Path]:
+    """Verwijder ronde-uitvoer, cache en Tobias-exports; alleen na het intypen van de rondenaam."""
+    from tuinscan.voorbeeld import VOORBEELD_BESTAND
+
+    naam = mappen.ronde_dir.name
+    if bevestiging.strip() != naam:
+        raise StapFout(f"bevestiging komt niet overeen met de ronde '{naam}'; niets verwijderd")
+    binnen = mappen.alle()
+    doelen = [mappen.ronde_dir]
+    if mappen.cache.exists():
+        doelen += sorted(mappen.cache.iterdir())
+    doelen += [mappen.invoer / cfg.tobias.bestand, mappen.invoer / VOORBEELD_BESTAND]
+    if not bewaar_correcties:
+        doelen.append(mappen.invoer / CORRECTIES)
+    weg = [d for d in doelen if _verwijder(d, binnen)]
+    for d in weg:
+        print(f"verwijderd: {d}")
+    print(f"Opgeruimd: {len(weg)} onderdelen verwijderd; {cfg.tobias.kolommen_bestand} bewaard")
+    return weg
+
+
+def stap_alles(cfg: Config, mappen: Mappen) -> float:
+    """download -> tuinen -> score -> rapport -> terugkoppeling maak, met tijd per stap."""
+    from tuinscan.download import voer_download_uit
+
+    def download() -> None:
+        r = voer_download_uit(cfg, mappen, False)
+        print(f"download: opgehaald {len(r.opgehaald)}, overgeslagen {len(r.overgeslagen)}, "
+              f"mislukt {r.mislukt}")  # fmt: skip
+        if r.mislukt:
+            raise StapFout(f"download mislukt voor: {', '.join(r.mislukt)}")
+
+    stappen = [
+        ("download", download),
+        ("tuinen", lambda: stap_tuinen(cfg, mappen)),
+        ("score", lambda: stap_score(cfg, mappen)),
+        ("rapport", lambda: stap_rapport(cfg, mappen)),
+        ("terugkoppeling maak", lambda: stap_terugkoppeling_maak(cfg, mappen)),
+    ]
+    start = time.monotonic()
+    for naam, functie in stappen:
+        t0 = time.monotonic()
+        try:
+            functie()
+        except StapFout:
+            raise
+        except Exception as e:
+            log.exception("stap %s mislukt", naam)
+            raise StapFout(f"stap '{naam}' mislukt: {e}") from e
+        print(f"[{naam}] klaar in {time.monotonic() - t0:.1f} s")
+    totaal = time.monotonic() - start
+    print(f"Alles klaar in {totaal:.1f} s ({totaal / 60:.1f} min)")
+    return totaal

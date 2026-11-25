@@ -1,24 +1,23 @@
 # HANDOFF — Tuinscan
 
 ## Status (2026-11-25)
-- PoC build plan written (PDOK values pinned): `docs/superpowers/plans/2026-11-25-tuinscan-poc.md` (16 tasks). No code yet.
-- Spec: "Specsheet Tuinscan" doc — https://claude.ai/artifact/H4Wmv6QW3E4iU3wH7tZ94X
+- Alle code-taken (1-15) klaar; `uv run pytest` en `uv run ruff check .` groen. Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`.
+- Commando's: `inspecteer`, `download`, `voorbeeld`, `tuinen`, `score`, `rapport`, `terugkoppeling maak|lees`, `alles`, `opruimen`. Zie README.md.
 
-## Key decisions
-- Tobias column names unknown → code only uses canonical field names; mapping lives in `invoer/kolommen.yaml`, drafted by `tuinscan inspecteer` (value patterns such as 16-digit BAG-id/postcode beat header names).
-- `tuinscan voorbeeld` builds a synthetic export from BAG so the full chain runs before Tobias delivers.
-- Complex perceel split: Voronoi on per-house seeds (BAG often has one pand per row, so no party walls in the data). QGIS correction via `invoer/tuincorrecties.gpkg`.
-- Voor/achter: dot product against the direction to the nearest BGT wegdeel. `tuin.delen` default `[voor]` until FG decides.
-- Missing signal = 0 contribution + "ontbrekend" flag (never inflates the score).
-- Added Pillow (thumbnails, outlines) on top of the spec's package list.
-- PDOK verified 2026-11-25 (`docs/pdok-bronnen.md`): `ortho25`/`ortho25IR` = summer (leaf-on), `orthoHR` = winter. Summer CIR exists (spec says it doesn't) → vegetation mask uses summer NDVI + ExG; NDVI start threshold 0.2.
-- BAG vbo → pand via `pand.href` ↔ pand feature id (no `pandidentificatie` field).
-- AHN: only "actueel" on PDOK, no previous version → S4a "nieuw t.o.v. vorige AHN" not possible in PoC.
+## Draaien
+`uv sync` → config kopiëren uit `config/tuinscan.example.yaml` (data buiten OneDrive) → `uv run tuinscan <stap> --config mijn.yaml`. Zonder Tobias-export: `download` → `voorbeeld` → `tobias.bestand: voorbeeld_export.xlsx` → `inspecteer`.
 
-## Open issues
-- Task 6 (laptop only): `/vsicurl/` and PDOK behind the corporate proxy; QGIS alignment check for the real wijk.
+## Open
+- Task 6 (laptop): `/vsicurl/` en PDOK achter de bedrijfsproxy; QGIS-check van uitlijning voor de echte wijk.
+- Task 16 (laptop): echte run met de Tobias-export; kolommen.yaml controleren.
+- Smoke-run (cloud, Amsterdam-centrum, 200x200 m): koppeling 100 %, maar maar 1 van 20 VHE's kreeg een voortuin; de "grondgebonden"-heuristiek van `voorbeeld` is in dichte binnenstad grof. In een gewone woonwijk opnieuw beoordelen.
 
-## Next steps
-1. Review plan, choose execution method.
-2. Tasks 1–5 (can run in cloud, tests are offline).
-3. Task 6 on the laptop, then Tasks 7–15, then Task 16 (real run).
+## Belangrijkste beslissingen
+- Tobias-kolomnamen onbekend: code kent alleen canonieke namen; mapping in `invoer/kolommen.yaml` (door `inspecteer` voorgesteld op waardepatronen).
+- Perceelsplitsing complex: Voronoi op huiszaden; correcties via `invoer/tuincorrecties.gpkg`. Voor/achter via richting naar dichtstbijzijnde BGT-wegdeel; `tuin.delen` standaard `[voor]`.
+- Ontbrekend signaal = 0 bijdrage + vlag "ontbrekend" (score wordt nooit opgeblazen).
+- PDOK: zomer-CIR bestaat, dus vegetatiemasker = zomer-NDVI OF ExG; AHN alleen actueel, dus S4a "nieuw t.o.v. vorige AHN" niet mogelijk in PoC.
+- R5: `alles` stopt bij een stapfout (exit 1), niet bij fouten per adres.
+- R6: `voorbeeld` schrijft nooit over de echte export heen; adresvelden komen uit `pdok.velden` (`vbo_straat`, `vbo_huisnummer`, ...).
+- R7: `opruimen` vraagt de rondenaam via `input()`, verwijdert alleen binnen de drie databomen (assert) en bewaart `kolommen.yaml`.
+- R8: `tuincorrecties.gpkg` wordt alleen met `--bewaar-correcties` behouden.

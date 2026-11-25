@@ -14,6 +14,9 @@ STAPPEN = {
     "tuinen": "Bepaal de tuinvlakken",
     "score": "Bereken signalen en score",
     "rapport": "Maak het HTML-rapport",
+    "voorbeeld": "Maak een voorbeeld-export uit BAG (tot de Tobias-export er is)",
+    "alles": "Voer download, tuinen, score, rapport en terugkoppeling maak uit",
+    "opruimen": "Verwijder cache, ronde-uitvoer en exportbestanden",
     "terugkoppeling": "Maak of lees het terugkoppelbestand",
 }
 
@@ -56,7 +59,35 @@ def _parser() -> argparse.ArgumentParser:
         if naam == "download":
             sp.add_argument("--vernieuw", action="store_true", help="haal alles opnieuw op")
             sp.add_argument("--lijst-lagen", action="store_true", help="toon WMTS-lagen en stop")
+        if naam == "voorbeeld":
+            sp.add_argument("--aantal", type=int, default=200, metavar="N", help="aantal VHE's")
+            sp.add_argument("--seed", type=int, default=1, metavar="S", help="toevalszaad")
+        if naam == "opruimen":
+            sp.add_argument("--bewaar-correcties", action="store_true",
+                            help="bewaar invoer/tuincorrecties.gpkg")  # fmt: skip
     return p
+
+
+def _extra_stap(args, cfg, mappen) -> int:
+    from tuinscan.stappen import StapFout, stap_alles, stap_opruimen
+    from tuinscan.voorbeeld import maak_voorbeeld_export
+
+    try:
+        if args.stap == "voorbeeld":
+            pad = maak_voorbeeld_export(cfg, mappen, args.aantal, args.seed)
+            print(f"Voorbeeld-export geschreven naar {pad}")
+            print(f"Gebruik: zet in de config tobias.bestand: {pad.name}, draai 'tuinscan "
+                  "inspecteer' en controleer kolommen.yaml")  # fmt: skip
+        elif args.stap == "alles":
+            stap_alles(cfg, mappen)
+        else:
+            naam = mappen.ronde_dir.name
+            tekst = input(f"Typ de rondenaam '{naam}' om alles te verwijderen: ")
+            stap_opruimen(cfg, mappen, tekst, args.bewaar_correcties)
+    except (ConfigFout, StapFout) as e:
+        print(f"Fout: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Fout: {e}", file=sys.stderr)
             return 1
         return 0
+    if args.stap in ("voorbeeld", "alles", "opruimen"):
+        return _extra_stap(args, cfg, mappen)
     print(f"Stap '{args.stap}': nog niet beschikbaar")
     return 2
 
