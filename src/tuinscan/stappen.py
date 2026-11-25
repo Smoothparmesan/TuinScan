@@ -349,13 +349,19 @@ def stap_terugkoppeling_lees(cfg: Config, mappen: Mappen, bestand: str | None = 
     return uit
 
 
-def _verwijder(pad: Path, binnen: list[Path]) -> bool:
-    """Verwijder een bestand of map, maar nooit iets buiten de drie databoomuitvoer-mappen."""
-    pad = pad.resolve()
-    assert any(pad.is_relative_to(b.resolve()) and pad != b.resolve() for b in binnen), (
-        f"{pad} ligt niet in een databoom-map; niet verwijderd"
-    )
-    if pad.is_dir():
+def _controleer_doel(pad: Path, binnen: list[Path]) -> None:
+    """Een doel moet in een databoom-map liggen (niet de map zelf), ook na oplossen van links."""
+    wortels = [b.resolve() for b in binnen]
+    # een symlink/junction wordt zelf verwijderd, dus telt de plek van de link, niet het doel
+    echt = pad.parent.resolve() / pad.name if pad.is_symlink() else pad.resolve()
+    if not any(echt.is_relative_to(w) and echt != w for w in wortels):
+        raise StapFout(f"{pad} ligt niet in invoer, cache of uitvoer; niets verwijderd")
+
+
+def _verwijder(pad: Path) -> bool:
+    if pad.is_symlink():
+        pad.unlink()  # alleen de link, nooit het doel
+    elif pad.is_dir():
         shutil.rmtree(pad)
     elif pad.exists():
         pad.unlink()
@@ -380,7 +386,9 @@ def stap_opruimen(
     doelen += [mappen.invoer / cfg.tobias.bestand, mappen.invoer / VOORBEELD_BESTAND]
     if not bewaar_correcties:
         doelen.append(mappen.invoer / CORRECTIES)
-    weg = [d for d in doelen if _verwijder(d, binnen)]
+    for d in doelen:  # eerst alles controleren, dan pas verwijderen
+        _controleer_doel(d, binnen)
+    weg = [d for d in doelen if _verwijder(d)]
     for d in weg:
         print(f"verwijderd: {d}")
     print(f"Opgeruimd: {len(weg)} onderdelen verwijderd; {cfg.tobias.kolommen_bestand} bewaard")

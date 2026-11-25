@@ -41,7 +41,7 @@ Elk commando heeft `--config mijn.yaml` nodig (`uv run tuinscan <stap> --config 
 
 Handig:
 
-- `uv run tuinscan alles --config mijn.yaml` doet download tot en met `terugkoppeling maak` in een keer en toont de tijd per stap.
+- `uv run tuinscan alles --config mijn.yaml` doet download tot en met `terugkoppeling maak` in een keer en toont de tijd per stap. Mislukt een stap, of mislukt een downloadonderdeel (`mislukt` in de uitvoer van `download`), dan stopt `alles` met een foutmelding.
 - Nog geen Tobias-export? Draai eerst `download`, dan `voorbeeld --aantal 200`. Dat maakt `invoer/voorbeeld_export.xlsx` (nooit de echte export). Zet `tobias.bestand` in je config op `voorbeeld_export.xlsx` en draai `inspecteer`.
 - Een enkel adres dat faalt stopt de stap niet; zie `foutenlijst.csv` (VHE-nummer, stap, reden).
 - `opruimen` vraagt om de rondenaam. Met `--bewaar-correcties` blijft `tuincorrecties.gpkg` staan; `kolommen.yaml` blijft altijd staan.

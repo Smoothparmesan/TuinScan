@@ -19,9 +19,9 @@ def test_voorbeeld_roundtrip(miniwijk):
     assert voorstel["bag_vbo_id"].kolom == "BAG VBO" and voorstel["bag_vbo_id"].zekerheid == "hoog"
     mapping = {v: m.kolom for v, m in voorstel.items() if m.kolom}
     assert mapping["vhe_nummer"] == "Eenheid" and mapping["complex"] == "Complexnr"
-    # alle vier miniwijk-woningen zijn grondgebonden (rij: 100 m2 / 3 woningen)
-    assert len(df) == 4 and set(df["Type"]) == {"eengezinswoning"}
-    assert sorted(df["Eenheid"]) == ["VB00001", "VB00002", "VB00003", "VB00004"]
+    # alleen V is grondgebonden: het rij-pand van de miniwijk bevat drie woon-vbo's
+    assert len(df) == 1 and set(df["Type"]) == {"eengezinswoning"}
+    assert list(df["Eenheid"]) == ["VB00001"]
 
 
 def test_voorbeeld_leest_door_lees_vhes(miniwijk, tmp_path):
@@ -40,7 +40,7 @@ def test_voorbeeld_leest_door_lees_vhes(miniwijk, tmp_path):
     )
     fouten = Foutenlijst()
     vhes = lees_vhes(cfg, mw.mappen, fouten)
-    assert len(vhes) == 4 and not fouten.regels
+    assert len(vhes) == 1 and not fouten.regels
     assert vhes["bag_vbo_id"].str.len().eq(16).all()
 
 
@@ -52,3 +52,59 @@ def test_voorbeeld_zonder_cache(miniwijk):
     shutil.rmtree(miniwijk.mappen.cache)
     with pytest.raises(StapFout):
         maak_voorbeeld_export(miniwijk.cfg, miniwijk.mappen)
+
+
+def test_voorbeeld_pand_met_een_woning_per_huis(miniwijk):
+    """Rijwoningen als apart pand met elk één vbo tellen wel mee."""
+    import geopandas as gpd
+
+    from tuinscan.download import schrijf_vector
+    from tuinscan.pdok.cache import vector_pad
+    from tuinscan.stappen import _lees_cache
+
+    mw = miniwijk
+    panden = _lees_cache(mw.mappen, "bag_pand")
+    vbo = _lees_cache(mw.mappen, "bag_vbo")
+    rij = panden[panden["identificatie"] == mw.pand_ids["rij"]].iloc[0]
+    delen = []
+    for k, h in enumerate(("R1", "R2", "R3")):
+        x0 = rij.geometry.bounds[0] + 6 * k
+        from shapely.geometry import box
+
+        delen.append({"feature_id": f"x-{k}", "identificatie": f"9{k}",
+                      "aantal_verblijfsobjecten": 1, "gebruiksdoel": "woonfunctie",
+                      "geometry": box(x0, rij.geometry.bounds[1], x0 + 6, rij.geometry.bounds[3])})
+        i = vbo.index[vbo["identificatie"] == mw.vbo_ids[h]][0]
+        vbo.at[i, "pand.href"] = [f"https://x/items/x-{k}"]
+    nieuw = gpd.GeoDataFrame(
+        [*panden[panden["identificatie"] != mw.pand_ids["rij"]].to_dict("records"), *delen],
+        crs=28992,
+    )
+    schrijf_vector(nieuw, vector_pad(mw.mappen.cache, "bag_pand"))
+    schrijf_vector(vbo, vector_pad(mw.mappen.cache, "bag_vbo"))
+    pad = maak_voorbeeld_export(mw.cfg, mw.mappen)
+    assert len(lees_ruwe_export(pad, None, None)) == 4
+
+
+def test_voorbeeld_slaat_rij_zonder_huisnummer_over(miniwijk):
+    from tuinscan.download import schrijf_vector
+    from tuinscan.pdok.cache import vector_pad
+    from tuinscan.stappen import _lees_cache
+
+    mw = miniwijk
+    vbo = _lees_cache(mw.mappen, "bag_vbo")
+    vbo.loc[vbo["identificatie"] == mw.vbo_ids["V"], "huisnummer"] = None
+    schrijf_vector(vbo, vector_pad(mw.mappen.cache, "bag_vbo"))
+    from tuinscan.stappen import StapFout
+
+    with pytest.raises(StapFout):  # de enige kandidaat valt af, geen crash
+        maak_voorbeeld_export(mw.cfg, mw.mappen)
+
+
+def test_voorbeeld_cli(miniwijk, capsys):
+    from tuinscan.cli import main
+
+    assert main(["voorbeeld", "--config", str(miniwijk.config_pad), "--aantal", "5"]) == 0
+    out = capsys.readouterr().out
+    assert "voorbeeld_export.xlsx" in out and "tobias.bestand" in out
+    assert (miniwijk.mappen.invoer / "voorbeeld_export.xlsx").exists()

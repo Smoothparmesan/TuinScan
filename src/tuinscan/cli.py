@@ -87,6 +87,9 @@ def _extra_stap(args, cfg, mappen) -> int:
     except (ConfigFout, StapFout) as e:
         print(f"Fout: {e}", file=sys.stderr)
         return 1
+    except EOFError:
+        print("Fout: geen bevestiging ontvangen; niets verwijderd", file=sys.stderr)
+        return 1
     return 0
 
 

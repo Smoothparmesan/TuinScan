@@ -66,17 +66,57 @@ def test_opruimen_cli_vraagt_naam(miniwijk, monkeypatch):
     assert not ronde.exists()
 
 
-def test_opruimen_buiten_databomen_nooit(miniwijk):
-    from tuinscan.stappen import _verwijder
+def test_opruimen_controleert_alles_voor_verwijderen(miniwijk, tmp_path):
+    from tuinscan.stappen import _controleer_doel
 
     mw = miniwijk
-    buiten = mw.mappen.invoer.parent / "elders.txt"
+    buiten = tmp_path / "elders.txt"
     buiten.write_text("x")
-    with pytest.raises(AssertionError):
-        _verwijder(buiten, mw.mappen.alle())
-    with pytest.raises(AssertionError):  # een databoom zelf ook niet
-        _verwijder(mw.mappen.cache, mw.mappen.alle())
+    with pytest.raises(StapFout):
+        _controleer_doel(buiten, mw.mappen.alle())
+    with pytest.raises(StapFout):  # een databoom zelf ook niet
+        _controleer_doel(mw.mappen.cache, mw.mappen.alle())
     assert buiten.exists() and mw.mappen.cache.exists()
+
+
+def test_opruimen_symlink_verwijdert_alleen_link(miniwijk, tmp_path):
+    mw = miniwijk
+    _, cache, ronde = _vul(mw)
+    doel = tmp_path / "buitenmap"
+    doel.mkdir()
+    (doel / "belangrijk.txt").write_text("x")
+    try:
+        (cache / "link").symlink_to(doel, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks niet toegestaan")
+    stap_opruimen(mw.cfg, mw.mappen, ronde.name)
+    assert not (cache / "link").is_symlink() and (doel / "belangrijk.txt").exists()
+
+
+def test_opruimen_weigert_zonder_iets_te_verwijderen(miniwijk, monkeypatch, tmp_path):
+    """Eén ongeldig doel (hier: ronde-map buiten uitvoer) -> niets weg."""
+    import dataclasses
+
+    mw = miniwijk
+    invoer, cache, ronde = _vul(mw)
+    elders = tmp_path / "elders"
+    elders.mkdir()
+    mappen = dataclasses.replace(mw.mappen, ronde_dir=elders)
+    with pytest.raises(StapFout):
+        stap_opruimen(mw.cfg, mappen, "elders")
+    assert elders.exists() and ronde.exists() and any(cache.iterdir())
+
+
+def test_opruimen_cli_eof(miniwijk, monkeypatch, capsys):
+    mw = miniwijk
+    _, _, ronde = _vul(mw)
+
+    def eof(_=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", eof)
+    assert main(["opruimen", "--config", str(mw.config_pad)]) == 1
+    assert ronde.exists() and "Fout" in capsys.readouterr().err
 
 
 def test_alles_stopt_bij_stapfout(miniwijk, monkeypatch, capsys):
