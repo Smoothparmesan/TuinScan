@@ -64,3 +64,19 @@ def test_hash_changes_with_weights_not_with_paths(tmp_path):
     h = parameterset_hash(laad_config(pad2))
     assert h != parameterset_hash(basis)
     assert len(h) == 8
+
+
+@pytest.mark.parametrize(
+    "sleutel, wijzig",
+    [
+        ("score.S1.gewicht", lambda d: d["score"]["S1"].update(gewicht="25")),
+        ("gebied.bbox_rd", lambda d: d["gebied"].update(bbox_rd=5)),
+        ("score.S2.onder", lambda d: d["score"]["S2"].update(onder="0.05")),
+        ("mappen.invoer", lambda d: d["mappen"].update(invoer=None)),
+    ],
+)
+def test_wrong_type_raises_configfout_naming_key(tmp_path, sleutel, wijzig):
+    pad = _schrijf(tmp_path, wijzig)
+    with pytest.raises(ConfigFout) as e:
+        laad_config(pad)
+    assert sleutel in str(e.value)

@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import types
+import typing
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -119,6 +121,30 @@ class Config:
     terugkoppeling: Terugkoppeling
 
 
+def _past(w: Any, t: Any) -> bool:
+    if t is Any:
+        return True
+    if t is None or t is type(None):
+        return w is None
+    o = typing.get_origin(t)
+    if o in (typing.Union, types.UnionType):
+        return any(_past(w, a) for a in typing.get_args(t))
+    if o in (list, tuple):
+        a = typing.get_args(t)
+        item = a[0] if a else Any
+        return isinstance(w, (list, tuple)) and all(_past(x, item) for x in w)
+    if o is dict:
+        k, v = typing.get_args(t) or (Any, Any)
+        return isinstance(w, dict) and all(_past(a, k) and _past(b, v) for a, b in w.items())
+    if t is bool:
+        return isinstance(w, bool)
+    if t is int:
+        return isinstance(w, int) and not isinstance(w, bool)
+    if t is float:
+        return isinstance(w, (int, float)) and not isinstance(w, bool)
+    return isinstance(w, t)
+
+
 def _bouw(cls, data: Any, sleutel: str):
     if not isinstance(data, dict):
         raise ConfigFout(f"{sleutel}: verwacht een tabel, kreeg {type(data).__name__}")
@@ -129,6 +155,10 @@ def _bouw(cls, data: Any, sleutel: str):
     onbekend = sorted(data.keys() - namen)
     if onbekend:
         raise ConfigFout(f"{sleutel}.{onbekend[0]}: onbekende sleutel")
+    hints = typing.get_type_hints(cls)
+    for naam in namen:
+        if not _past(data[naam], hints[naam]):
+            raise ConfigFout(f"{sleutel}.{naam}: ongeldig type of waarde ({data[naam]!r})")
     return cls(**data)
 
 

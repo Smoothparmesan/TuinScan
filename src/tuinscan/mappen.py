@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from tuinscan.config import Config
+from tuinscan.config import Config, ConfigFout
 
 ONEDRIVE_ENV = ("OneDrive", "OneDriveCommercial", "OneDriveConsumer")
 
@@ -23,12 +23,15 @@ class Mappen:
 
     @classmethod
     def uit_config(cls, cfg: Config, ronde: str | None) -> "Mappen":
+        naam = ronde or cfg.gebied.naam
+        if not naam or naam in (".", "..") or any(c in naam for c in "/\\:") or ".." in naam:
+            raise ConfigFout(f"ronde: ongeldige naam {naam!r} (geen padtekens of '..')")
         uitvoer = Path(cfg.mappen.uitvoer)
         return cls(
             invoer=Path(cfg.mappen.invoer),
             cache=Path(cfg.mappen.cache),
             uitvoer=uitvoer,
-            ronde_dir=uitvoer / (ronde or cfg.gebied.naam),
+            ronde_dir=uitvoer / naam,
         )
 
     def alle(self) -> list[Path]:

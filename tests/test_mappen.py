@@ -29,3 +29,11 @@ def test_uit_config_ronde_default_and_explicit():
     m = Mappen.uit_config(cfg, None)
     assert m.ronde_dir == m.uitvoer / "proefwijk"
     assert Mappen.uit_config(cfg, "r2").ronde_dir == m.uitvoer / "r2"
+
+
+@pytest.mark.parametrize("ronde", ["../x", "a/b", "a\\b", "..", "x..y"])
+def test_ronde_with_path_chars_rejected(ronde):
+    from tuinscan.config import ConfigFout
+
+    with pytest.raises(ConfigFout, match="ronde"):
+        Mappen.uit_config(laad_config(EXAMPLE), ronde)
