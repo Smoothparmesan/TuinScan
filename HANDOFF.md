@@ -11,7 +11,6 @@
 - Voor/achter: dot product against the direction to the nearest BGT wegdeel. `tuin.delen` default `[voor]` until FG decides.
 - Missing signal = 0 contribution + "ontbrekend" flag (never inflates the score).
 - Added Pillow (thumbnails, outlines) on top of the spec's package list.
-
 - PDOK verified 2026-11-25 (`docs/pdok-bronnen.md`): `ortho25`/`ortho25IR` = summer (leaf-on), `orthoHR` = winter. Summer CIR exists (spec says it doesn't) → vegetation mask uses summer NDVI + ExG; NDVI start threshold 0.2.
 - BAG vbo → pand via `pand.href` ↔ pand feature id (no `pandidentificatie` field).
 - AHN: only "actueel" on PDOK, no previous version → S4a "nieuw t.o.v. vorige AHN" not possible in PoC.
