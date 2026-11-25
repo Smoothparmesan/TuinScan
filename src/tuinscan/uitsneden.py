@@ -5,13 +5,17 @@ Geen adrestekst op de beelden; bestandsnamen bevatten alleen het VHE-nummer.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
 import rasterio
 from PIL import Image, ImageDraw
+from rasterio.errors import RasterioIOError
 from rasterio.windows import from_bounds
 from shapely.geometry.base import BaseGeometry
+
+log = logging.getLogger(__name__)
 
 BUFFER_M = 5.0
 THUMB_PX = 200
@@ -44,16 +48,20 @@ def maak_uitsnede(
     bron: Path | None, tuin_geom: BaseGeometry, buffer_m: float, max_px: int, doel: Path
 ) -> Path | None:
     """RGB-uitsnede van bounds + buffer, langste zijde `max_px`, met gele tuincontour."""
-    if bron is None or not Path(bron).exists():
+    if bron is None or not Path(bron).exists() or tuin_geom is None or tuin_geom.is_empty:
         return None
     minx, miny, maxx, maxy = tuin_geom.bounds
     bounds = (minx - buffer_m, miny - buffer_m, maxx + buffer_m, maxy + buffer_m)
-    with rasterio.open(bron) as src:
-        venster = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
-        if venster.width < 1 or venster.height < 1:
-            return None
-        data = src.read(window=venster, boundless=True, masked=True)
-        transform = src.window_transform(venster)
+    try:
+        with rasterio.open(bron) as src:
+            venster = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
+            if venster.width < 1 or venster.height < 1:
+                return None
+            data = src.read(window=venster, boundless=True, masked=True)
+            transform = src.window_transform(venster)
+    except RasterioIOError as fout:
+        log.warning("uitsnede overgeslagen, bron onleesbaar (%s): %s", Path(bron).name, fout)
+        return None
     if data.shape[0] < 3 or np.ma.getmaskarray(data[:3]).all():
         return None
     rgb = np.ma.filled(data[:3].astype(np.float32), 0).clip(0, 255).astype(np.uint8)
@@ -70,7 +78,7 @@ def maak_uitsnede(
     inv = ~transform
     for coords in _ringen(tuin_geom):
         punten = []
-        for x, y in coords:
+        for x, y, *_ in coords:
             kol, rij = inv @ (x, y)
             punten.append((kol * nieuw[0] / b, rij * nieuw[1] / h))
         teken.line(punten, fill=CONTOUR_KLEUR, width=CONTOUR_BREEDTE, joint="curve")

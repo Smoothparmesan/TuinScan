@@ -1,5 +1,6 @@
 import numpy as np
 from PIL import Image
+from shapely.geometry import Polygon
 
 from miniwijk import rd_box
 from tuinscan.rasters import bronnen_uit_cache
@@ -18,10 +19,33 @@ def test_thumb_max_200px(miniwijk, tmp_path):
 
 def test_outline_drawn(miniwijk, tmp_path):
     bronnen = bronnen_uit_cache(miniwijk.mappen)
-    pad = maak_uitsnede(bronnen["zomer_nu"], rd_box(R1_ACHTER), 5.0, 800, tmp_path / "d.jpg")
+    tuin = rd_box(R1_ACHTER)
+    pad = maak_uitsnede(bronnen["zomer_nu"], tuin, 5.0, 800, tmp_path / "d.jpg")
     px = np.asarray(Image.open(pad).convert("RGB")).astype(int)
-    geel = (abs(px - (255, 212, 0)).sum(axis=-1) < 60).sum()
-    assert geel > 100
+    h, b = px.shape[:2]
+    geel = abs(px - (255, 212, 0)).sum(axis=-1) < 60
+    rij, kol = np.nonzero(geel)
+    assert len(rij) > 100
+    # tolerantie 9 px: vensterrondering (<= 1 bronpixel = ~6 px) + lijnbreedte
+    # beeld = tuin-bounds + 5 m aan elke kant (bron dekt dit volledig)
+    minx, miny, maxx, maxy = tuin.bounds
+    w, hh = maxx - minx + 10, maxy - miny + 10
+    s = 800 / max(w, hh)
+    verwacht = (5 * s, (5 + maxx - minx) * s, 5 * s, (5 + maxy - miny) * s)  # x0, x1, y0, y1
+    assert abs(kol.min() - verwacht[0]) <= 9 and abs(kol.max() - verwacht[1]) <= 9
+    assert abs(rij.min() - verwacht[2]) <= 9 and abs(rij.max() - verwacht[3]) <= 9
+
+
+def test_corrupt_source_returns_none(miniwijk, tmp_path):
+    kapot = tmp_path / "kapot.tif"
+    kapot.write_bytes(b"II*\x00garbage")
+    assert maak_uitsnede(kapot, rd_box(R1_ACHTER), 5.0, 200, tmp_path / "x.jpg") is None
+
+
+def test_empty_geometry_returns_none(miniwijk, tmp_path):
+    bronnen = bronnen_uit_cache(miniwijk.mappen)
+    leeg = Polygon()
+    assert maak_uitsnede(bronnen["zomer_nu"], leeg, 5.0, 200, tmp_path / "x.jpg") is None
 
 
 def test_missing_source_returns_none(miniwijk, tmp_path):
