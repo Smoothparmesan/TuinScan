@@ -22,6 +22,8 @@
 - Weights, bounds, thresholds, filters, column mapping: config only, never code (N04). All numeric values in this plan are **startwaarden**.
 - Signals in PoC: S1, S2, S3, S4a, S5. S4b is out. Enabled weights must sum to 100.
 - Code and config in Git; data folders never (`.gitignore`).
+- **PDOK facts are verified** in `docs/pdok-bronnen.md` (2026-11-25); config values below come from there.
+- **Deviation from spec (evidence in `docs/pdok-bronnen.md`)**: PDOK serves summer CIR (`YYYY_ortho25IR`, leaf-on). The vegetation mask therefore uses **summer NDVI** (primary) OR summer ExG; winter CIR is not used in the PoC. Winter RGB (`orthoHR`) is used only for detail images.
 - **Tobias column names are unknown**: the code addresses Tobias fields only through canonical names mapped in `tobias.kolommen`; no Tobias header string appears in code.
 
 ## Review Focus
@@ -110,32 +112,41 @@ pdok:
   brk_url: https://api.pdok.nl/kadaster/brk-kadastrale-kaart/ogc/v1
   bgt_url: https://api.pdok.nl/lv/bgt/ogc/v1
   collecties: {pand: pand, verblijfsobject: verblijfsobject, perceel: perceel, wegdeel: wegdeel, begroeid: begroeidterreindeel}
-  velden: {vbo_id: identificatie, vbo_pand: pandidentificatie, vbo_gebruiksdoel: gebruiksdoel, pand_id: identificatie, perceel_id: identificatie, wegdeel_functie: functie, begroeid_fysiek: fysiek_voorkomen}
+  velden:
+    vbo_id: identificatie
+    vbo_pand_href: pand.href          # list of URLs; last segment = pand feature id
+    vbo_gebruiksdoel: gebruiksdoel
+    woonfunctie: woonfunctie
+    pand_id: identificatie
+    pand_aantal_vbo: aantal_verblijfsobjecten
+    perceel_id: identificatie_lokaal_id
+    wegdeel_functie: functie
+    begroeid_fysiek: fysiek_voorkomen
   voetpad_functies: [voetpad, voetgangersgebied, "voetpad op trap"]
-  openbaar_groen_fysiek: [groenvoorziening, "gras- en kruidachtigen", struiken, houtwal]
+  openbaar_groen_fysiek: [groenvoorziening, loofbos, "gemengd bos", naaldbos, struiken, houtwal, "grasland overig"]
   workers: 4
 luchtfoto:
   rgb_wmts: https://service.pdok.nl/hwh/luchtfotorgb/wmts/v1_0
   cir_wmts: https://service.pdok.nl/hwh/luchtfotocir/wmts/v1_0
   matrixset: "EPSG:28992"
-  lagen:              # filled in Task 6 from GetCapabilities
-    zomer_nu: {laag: null, jaar: null, zoom: "14"}
-    zomer_vorig: {laag: null, jaar: null, zoom: "14"}
-    winter_nu: {laag: null, jaar: null, zoom: "15"}
-    winter_vorig: {laag: null, jaar: null, zoom: "15"}
-    cir_nu: {laag: null, jaar: null, zoom: "14"}
-    cir_vorig: {laag: null, jaar: null, zoom: "14"}
+  lagen:              # verified 2026-11-25; ortho25(IR) = summer, orthoHR = winter
+    zomer_nu: {laag: 2025_ortho25, jaar: 2025, zoom: "14"}
+    zomer_vorig: {laag: 2024_ortho25, jaar: 2024, zoom: "14"}
+    cir_nu: {laag: 2025_ortho25IR, jaar: 2025, zoom: "14"}      # summer CIR
+    cir_vorig: {laag: 2024_ortho25IR, jaar: 2024, zoom: "14"}
+    winter_nu: {laag: 2026_orthoHR, jaar: 2026, zoom: "15"}     # detail images only
+    winter_vorig: {laag: 2025_orthoHR, jaar: 2025, zoom: "15"}
 ahn:
-  versie: null
-  dtm_index: null     # GeoJSON kaartbladindex URL, filled in Task 6
-  dsm_index: null
-  url_veld: null      # property in the index holding the COG URL
-  vorige: null        # optional {versie, dtm_index, dsm_index}
+  versie: "AHN actueel (PDOK, stand 2026-11)"
+  dtm_index: https://service.pdok.nl/rws/actueel-hoogtebestand-nederland/atom/downloads/dtm_05m/kaartbladindex.json
+  dsm_index: https://service.pdok.nl/rws/actueel-hoogtebestand-nederland/atom/downloads/dsm_05m/kaartbladindex.json
+  url_veld: url
+  vorige: null        # optional {versie, dtm_index, dsm_index}; PDOK feed has no previous version
 tuin: {delen: [voor], max_diepte_m: 25, voorzijde_zoekafstand_m: 30, min_oppervlak_m2: 5}
 signalen:
   resolutie_m: 0.25
   exg_drempel: 0.05
-  ndvi_drempel: 0.3
+  ndvi_drempel: 0.2   # spec says 0.3; PDOK JPEG CIR measured lower (crown median 0.27–0.33)
   schaduw_helderheid: 40
   s2_hoogte_m: 2.0
   s3_hoogte_m: 1.0
@@ -237,7 +248,7 @@ def test_inspecteer_does_not_overwrite(tmp_path): # existing kolommen.yaml uncha
 **Interfaces:**
 - Produces:
   - `RD = "http://www.opengis.net/def/crs/EPSG/0/28992"`
-  - `haal_features(basis_url: str, collectie: str, bbox: tuple[float,float,float,float], sessie: requests.Session, limit: int = 1000) -> gpd.GeoDataFrame` — GET `{basis_url}/collections/{collectie}/items` with `bbox`, `bbox-crs=RD`, `crs=RD`, `limit`, `f=json`; follows `links[rel=next]` until absent; result CRS EPSG:28992; empty frame with geometry column if no features. Retries 3× on 429/5xx with backoff 2/4/8 s.
+  - `haal_features(basis_url: str, collectie: str, bbox: tuple[float,float,float,float], sessie: requests.Session, limit: int = 1000) -> gpd.GeoDataFrame` — GET `{basis_url}/collections/{collectie}/items` with `bbox`, `bbox-crs=RD`, `crs=RD`, `limit`, `f=json`; follows `links[rel=next]` until absent; keeps the GeoJSON feature `id` as column `feature_id`; result CRS EPSG:28992; empty frame with geometry column if no features. Retries 3× on 429/5xx with backoff 2/4/8 s.
   - `Manifest(pad: Path)`: `.heeft(sleutel: str, bbox) -> bool`, `.registreer(sleutel, url, bbox, extra: dict)`, `.lees(sleutel) -> dict`; JSON on disk, written atomically (temp file + replace).
   - `vector_pad(cache: Path, sleutel: str) -> Path` → `cache/vector/{sleutel}.gpkg`.
 
@@ -249,6 +260,7 @@ def test_sends_bbox_and_crs_params(): # assert request query has bbox="1,2,3,4",
 def test_no_address_params(): # request query keys ⊆ {"bbox","bbox-crs","crs","limit","f"} on first call
 def test_retry_on_503(): # 503 then 200 → result ok, 2 calls (patch sleep)
 def test_empty_collection(): # 0 features → empty GeoDataFrame with crs 28992
+def test_feature_id_kept(): # feature {"id": "uuid-1", ...} → row feature_id == "uuid-1"; list properties (pand.href) preserved as list
 def test_manifest_roundtrip_and_bbox_mismatch(tmp_path): # registreer bbox A → heeft(A) True, heeft(B) False
 ```
 
@@ -270,16 +282,17 @@ def test_manifest_roundtrip_and_bbox_mismatch(tmp_path): # registreer bbox A →
   - `TileMatrix(id: str, resolutie: float, origin_x: float, origin_y: float, tegel_b: int, tegel_h: int, matrix_b: int, matrix_h: int)`; `resolutie = ScaleDenominator * 0.00028`.
   - `lees_capabilities(xml: bytes, matrixset: str) -> Capabilities(lagen: dict[str, str_format], matrices: dict[str, TileMatrix])`.
   - `tegels_voor_bbox(m: TileMatrix, bbox) -> list[tuple[int,int]]` (col,row): `col = floor((x - origin_x) / (res*tegel_b))`, `row = floor((origin_y - y) / (res*tegel_h))`, inclusive ranges clipped to matrix size.
-  - `download_mozaiek(url: str, laag: str, matrixset: str, matrix: TileMatrix, formaat: str, bbox, doel: Path, sessie, workers: int) -> MozaiekInfo(pad, tegels_totaal, tegels_mislukt)` — KVP GetTile (`SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER&STYLE=default&TILEMATRIXSET&TILEMATRIX&TILEROW&TILECOL&FORMAT`), decode with Pillow, write a 3-band uint8 tiled/deflate GeoTIFF covering exactly the tile union, nodata 0, plus an internal mask for failed tiles. Thread pool of `workers`.
+  - `download_mozaiek(url: str, laag: str, matrixset: str, matrix: TileMatrix, formaat: str, bbox, doel: Path, sessie, workers: int) -> MozaiekInfo(pad, tegels_totaal, tegels_mislukt)` — REST GetTile `{url}/{laag}/{matrixset}/{matrix.id}/{col}/{row}.jpeg` (verified), decode with Pillow; a tile that is HTTP ≠ 200 **or uniformly white (255) or black (0)** counts as failed (PDOK returns white 200-tiles where a year has no coverage yet); write a 3-band uint8 tiled/deflate GeoTIFF covering exactly the tile union, nodata 0, plus an internal mask for failed tiles. Thread pool of `workers`.
   - `lijst_lagen(url) -> list[str]` (for Task 6).
 
 - [ ] **Step 1: Failing tests**
 
 ```python
-def test_resolution_from_scale(): # ScaleDenominator 750 → 0.21 m
+def test_resolution_from_scale(): # ScaleDenominator 750 → 0.21 m; origin (-285401.92, 903401.92) parsed
 def test_tiles_cover_bbox(): # known matrix, bbox spanning 2×3 tiles → 6 (col,row) pairs, exact values
 def test_mosaic_georeference(tmp_path): # mock 4 tiles of solid colours → GeoTIFF bounds == tile-union bounds, crs 28992, pixel at tile 2 centre == its colour
 def test_failed_tile_is_masked(tmp_path): # one tile 404 → tegels_mislukt == 1, that area read_masks()==0, no exception
+def test_white_tile_is_masked(tmp_path): # one tile all-255 JPEG with HTTP 200 → tegels_mislukt == 1, masked
 ```
 
 - [ ] **Step 2: Run** `uv run pytest tests/test_wmts.py -v` — FAIL.
@@ -301,7 +314,7 @@ def test_failed_tile_is_masked(tmp_path): # one tile 404 → tegels_mislukt == 1
 - Produces:
   - `kaartbladen_voor_bbox(index: gpd.GeoDataFrame, url_veld: str, bbox) -> list[str]`.
   - `lees_ahn(bronnen: list[str], bbox, doel: Path) -> Path` — opens each via `rasterio.open(bron)` (URLs prefixed `/vsicurl/`), windowed read of the bbox, `rasterio.merge.merge`, float32 GeoTIFF, nodata preserved. Before opening remote files set `GDAL_HTTP_PROXY` from `HTTPS_PROXY` and `CURL_CA_BUNDLE`/`GDAL_CURL_CA_BUNDLE` from `REQUESTS_CA_BUNDLE` when present (corporate proxy).
-  - `voer_download_uit(cfg, mappen, vernieuw: bool) -> DownloadRapport` — bbox = `gebied.bbox_rd` grown by `buffer_m`; fetches vector keys `bag_pand, bag_vbo, brk_perceel, bgt_wegdeel, bgt_begroeid`, raster keys `zomer_nu, zomer_vorig, winter_nu, winter_vorig, cir_nu, cir_vorig` (a layer with `laag: null` is skipped and recorded as `niet_geconfigureerd`), `ahn_dtm, ahn_dsm` (+ `ahn_vorig_dtm/dsm` if `ahn.vorige`). Skips keys whose manifest bbox matches unless `vernieuw`. Raster paths `cache/raster/{sleutel}.tif`.
+  - `voer_download_uit(cfg, mappen, vernieuw: bool) -> DownloadRapport` — bbox = `gebied.bbox_rd` grown by `buffer_m`; fetches vector keys `bag_pand, bag_vbo, brk_perceel, bgt_wegdeel, bgt_begroeid`, raster keys `zomer_nu, zomer_vorig, cir_nu, cir_vorig, winter_nu, winter_vorig` (a layer with `laag: null` is skipped and recorded as `niet_geconfigureerd`), `ahn_dtm, ahn_dsm` (+ `ahn_vorig_dtm/dsm` if `ahn.vorige`). Skips keys whose manifest bbox matches unless `vernieuw`. Raster paths `cache/raster/{sleutel}.tif`.
   - `--lijst-lagen` prints `lijst_lagen` for both WMTS services and exits.
 
 - [ ] **Step 1: Failing tests** (AHN: local GeoTIFF files as "remote" sources; download: monkeypatch `haal_features`, `download_mozaiek`, `lees_ahn`)
@@ -322,15 +335,14 @@ def test_bbox_is_only_spatial_input(tmp_path): # all monkeypatched calls receive
 
 ---
 
-### Task 6: [laptop] Verify PDOK sources and pin config values
+### Task 6: [laptop] Check PDOK behind the corporate proxy
 
-Runs on the work laptop (PDOK is not reachable from the cloud dev container). Do it right after Task 5: Tasks 7–10 rely on the attribute names it confirms.
+PDOK sources, layer names, fields and the AHN COG read were verified from the cloud environment on 2026-11-25 (`docs/pdok-bronnen.md`). What is left can only be checked on the work laptop.
 
 **Files:**
-- Modify: `config/tuinscan.example.yaml` (real layer names, index URLs, field names)
-- Create: `docs/pdok-bronnen.md` (what was verified, date, sample values)
+- Modify: `docs/pdok-bronnen.md` (section "Werklaptop")
 
-- [ ] **Step 1:** IT check: uv/Python allowed, PyPI and `api.pdok.nl`, `service.pdok.nl` reachable through the proxy. Install:
+- [ ] **Step 1:** IT check: uv/Python allowed, PyPI, `api.pdok.nl` and `service.pdok.nl` reachable through the proxy. Install:
 
 ```bash
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -340,11 +352,15 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 uv sync
 ```
 
-- [ ] **Step 2:** `uv run tuinscan download --config config/proefwijk.yaml --lijst-lagen` → pick `zomer_nu/vorig`, `winter_nu/vorig`, `cir_nu/vorig` layer names and years; confirm which RGB layers are the summer (leaf-on) acquisition. Fill `luchtfoto.lagen`.
-- [ ] **Step 3:** Open one `items?limit=1` per collection in a browser; confirm/adjust `pdok.collecties` and `pdok.velden` (especially whether `pandidentificatie` is a string or a list, the `gebruiksdoel` value for woningen, BGT `functie` values for voetpad, BGT `fysiek_voorkomen` values for openbaar groen).
-- [ ] **Step 4:** Find the AHN DTM/DSM 0.5 m kaartbladindex (PDOK AHN ATOM feed) and the property holding the COG URL; fill `ahn.*`. Test one `gdalinfo /vsicurl/<url>` via `uv run python -c "import rasterio; print(rasterio.open('/vsicurl/<url>').profile)"`. If `/vsicurl/` fails behind the proxy, record it in `docs/pdok-bronnen.md` and stop: fallback design (one PDOK AHN WCS request for the whole bbox) needs a decision.
-- [ ] **Step 5:** Set a small `gebied.bbox_rd` (≈ 500 × 500 m), run `uv run tuinscan download --config config/proefwijk.yaml`, open the GeoPackages and GeoTIFFs in QGIS, check alignment of luchtfoto, AHN and BAG.
-- [ ] **Step 6: Commit** config example + `docs/pdok-bronnen.md` (no data): `docs: verified PDOK sources and layer names`
+- [ ] **Step 2:** `/vsicurl/` behind the proxy (GDAL uses its own HTTP stack):
+
+```bash
+uv run python -c "import rasterio; print(rasterio.open('/vsicurl/https://service.pdok.nl/rws/ahn/atom/downloads/dsm_05m/R_25GN1.tif').profile)"
+```
+
+Expected: a profile with `crs: EPSG:28992`. If it fails, retry with `GDAL_HTTP_PROXY` and `GDAL_CURL_CA_BUNDLE` set (Task 5 sets these from `HTTPS_PROXY`/`REQUESTS_CA_BUNDLE`). Still failing → record it and stop: fallback (one PDOK AHN WCS request for the whole bbox) needs a decision.
+- [ ] **Step 3:** Set the real wijk `gebied.bbox_rd`, run `uv run tuinscan download --config config/proefwijk.yaml`, open GeoPackages and GeoTIFFs in QGIS and check alignment of luchtfoto, AHN and BAG; confirm the summer layers have coverage (no white areas) for the wijk.
+- [ ] **Step 4: Commit** `docs: PDOK check on work laptop`
 
 ---
 
@@ -358,7 +374,7 @@ uv sync
 - Consumes: `lees_vhes` output, cached vectors, `Config.pdok.velden`, `Foutenlijst`.
 - Produces:
   - Fixture `miniwijk(tmp_path) -> MiniWijk` with: road strip (BGT wegdeel `functie=voetpad` along y=0..2, and a `rijbaan` south of it), perceel P1 (row of 3 houses as **one** BAG pand with 3 vbo's, one perceel), perceel P2 (detached house, own pand + a BAG shed pand), perceel P3 (empty), BGT begroeid openbaar groen east of P2. Vbo ids valid 16-digit. Also writes the matching GeoPackages into a cache dir and a matching manifest. Reused by Tasks 8–15.
-  - `koppel(vhes: pd.DataFrame, vbo: gpd.GeoDataFrame, panden: gpd.GeoDataFrame, percelen: gpd.GeoDataFrame, velden, fouten) -> gpd.GeoDataFrame` — one row per VHE: `vhe_nummer, bag_vbo_id, pand_id, perceel_id, geometry (vbo point)` + VHE columns. Perceel = the perceel containing the vbo point (fallback: largest overlap with the pand). `vbo_pand` handled as string or list (first pand containing the point).
+  - `koppel(vhes: pd.DataFrame, vbo: gpd.GeoDataFrame, panden: gpd.GeoDataFrame, percelen: gpd.GeoDataFrame, velden, fouten) -> gpd.GeoDataFrame` — one row per VHE: `vhe_nummer, bag_vbo_id, pand_id, perceel_id, geometry (vbo point)` + VHE columns. Pand = the pand whose `feature_id` equals the last URL segment of an entry in the vbo's `pand.href` list (if several, the one containing the point; fallback when the href list is empty: point-in-polygon). Perceel = the perceel containing the vbo point (fallback: largest overlap with the pand). The `miniwijk` fixture uses this real PDOK shape (feature ids + `pand.href` URLs).
   - Fouten (stap `koppeling`): "BAG-verblijfsobject niet gevonden in werkgebied" (hint about Excel rounding if the id ends in `0`), "geen pand", "geen perceel", "meerdere VHE's op hetzelfde verblijfsobject" (all but first).
   - `koppelpercentage(n_vhe: int, n_gekoppeld: int) -> float`.
 
@@ -368,7 +384,8 @@ uv sync
 def test_all_miniwijk_vhes_link(miniwijk): # 4 VHEs → 4 rows, P1 houses share perceel_id
 def test_unknown_vbo_to_foutenlijst(miniwijk): # extra VHE with unknown id → 4 rows, 1 fout stap "koppeling"
 def test_two_vhes_one_vbo(miniwijk): # duplicate vbo → 1 row kept, fout "meerdere VHE's"
-def test_pand_field_as_list(miniwijk): # vbo_pand stored as ["id"] → same result
+def test_pand_via_href(miniwijk): # vbo with pand.href [".../items/<uuid>"] links to pand with feature_id <uuid>
+def test_pand_fallback_spatial(miniwijk): # empty pand.href → pand found by point-in-polygon
 ```
 
 - [ ] **Step 2: Run** `uv run pytest tests/test_koppeling.py -v` — FAIL.
@@ -427,7 +444,7 @@ def test_stap_tuinen_percentage(miniwijk, capsys): # 4/4 → "100 %" in output; 
   - `Raster = np.ma.MaskedArray` (bands, h, w); masked = nodata / failed tile / outside source.
   - `lees_venster(pad: Path | None, bounds, resolutie: float, resampling: Resampling) -> Raster | None` — `None` if `pad` is `None` or missing; reprojects (`rasterio.warp.reproject`) onto the grid with origin `floor(bounds/res)*res`.
   - `TuinRasters` dataclass: `transform, vorm, tuin_masker (bool), zone_masker (bool, S3 overhang zone), zomer_nu, zomer_vorig, cir_nu, cir_vorig, ndsm, ndsm_vorig` (each `Raster | None`).
-  - `bouw_tuinrasters(tuin: Polygon, zone: Polygon | None, bronnen: dict[str, Path | None], res: float) -> TuinRasters` — `bronnen` keys are the Task 5 cache keys (`zomer_nu, zomer_vorig, cir_nu, cir_vorig, ahn_dtm, ahn_dsm, ahn_vorig_dtm, ahn_vorig_dsm`) — window = bounds of `tuin ∪ zone` + 1 m; RGB/CIR bilinear, AHN nearest; `ndsm = dsm − dtm` with DTM gaps filled by `rasterio.fill.fillnodata(max_search_distance=10 px)`.
+  - `bouw_tuinrasters(tuin: Polygon, zone: Polygon | None, bronnen: dict[str, Path | None], res: float) -> TuinRasters` — `bronnen` keys are the Task 5 cache keys (`zomer_nu, zomer_vorig, cir_nu, cir_vorig, ahn_dtm, ahn_dsm, ahn_vorig_dtm, ahn_vorig_dsm`) — window = bounds of `tuin ∪ zone` + 1 m; RGB/CIR bilinear, AHN nearest; `ndsm = dsm − dtm` with DTM gaps filled by `rasterio.fill.fillnodata(max_search_distance=40 px)` (measured: DTM has large gaps under buildings).
   - `overhang_zone(tuin, panden, bgt_voetpad, bgt_groen, buffer_m) -> Polygon | None` = `(tuin.buffer(buffer_m) − tuin − panden) ∩ (voetpad ∪ openbaar groen)`.
 
 - [ ] **Step 1: Failing tests**
@@ -436,7 +453,7 @@ def test_stap_tuinen_percentage(miniwijk, capsys): # 4/4 → "100 %" in output; 
 def test_window_aligned_to_grid(miniwijk): # transform.c % 0.25 == 0
 def test_missing_source_is_none(miniwijk): # bronnen["zomer_vorig"] None → tr.zomer_vorig is None
 def test_outside_coverage_masked(miniwijk): # tuin half outside the tif → ≈ half of tuin pixels masked
-def test_ndsm_fills_dtm_gap(miniwijk): # DTM hole of 4 px → ndsm finite there
+def test_ndsm_fills_dtm_gap(miniwijk): # DTM hole of 30 px → ndsm finite there
 def test_overhang_zone_only_public(miniwijk): # zone ⊆ voetpad ∪ groen; zone ∩ tuin area == 0
 ```
 
@@ -457,7 +474,7 @@ def test_overhang_zone_only_public(miniwijk): # zone ⊆ voetpad ∪ groen; zone
   - `exg(rgb) -> np.ndarray` — chromatic `r,g,b = R/S, G/S, B/S` (S = R+G+B, S=0 → 0); `2g − r − b`.
   - `ndvi_cir(cir) -> np.ndarray` — band1 = NIR, band2 = rood: `(b1 − b2)/(b1 + b2)`.
   - `schaduw(rgb, helderheid) -> bool` — mean(R,G,B) < `schaduw_helderheid`.
-  - `vegetatie(zomer, cir, cfg) -> bool` — `exg(zomer) > exg_drempel` OR `ndvi_cir(cir) > ndvi_drempel` (CIR part skipped if `cir` is None).
+  - `vegetatie(zomer, cir, cfg) -> bool` — `ndvi_cir(cir) > ndvi_drempel` OR `exg(zomer) > exg_drempel`; `cir` is the **summer** CIR of the same year (NDVI part skipped if `cir` is None).
   - `s1_groentoename(tr, cfg) -> float | None` = groen-aandeel(zomer_nu) − groen-aandeel(zomer_vorig) over geldige tuin pixels (vegetation per year with that year's CIR). `None` if either year missing.
   - `s2_hoge_begroeiing(tr, cfg) -> float | None` = share of geldige tuin pixels with vegetatie_nu AND ndsm > `s2_hoogte_m`.
   - `s3_overhang(tr, cfg) -> float | None` = m² in `zone_masker` with vegetatie_nu AND ndsm > `s3_hoogte_m`; `0.0` if zone is empty; `None` if ndsm missing.
@@ -625,7 +642,7 @@ def test_control_group_deterministic(): # same seed → same VHEs; none overlap 
 
 **Interfaces:**
 - Produces:
-  - `maak_voorbeeld_export(cfg, mappen, n: int = 200, seed: int = 1) -> Path` — from cached BAG: woon-vbo's (`gebruiksdoel` contains the woonfunctie value) that look grondgebonden (no other woon-vbo within 1.0 m and pand area / woon-vbo count ≥ 30 m²); random sample `n`; writes `invoer/voorbeeld_export.xlsx` with deliberately non-canonical headers (`Eenheid`, `BAG VBO`, `Straatnaam`, `Huisnr`, `Postcode`, `Wijknaam`, `Complexnr`, `Type`) and BAG ids **as numbers** (exercises Task 2). VHE numbers synthetic (`VB00001`…), wijk = `gebied.naam`, complex = perceel id, type `eengezinswoning`. Lets the whole chain run before the real Tobias export exists.
+  - `maak_voorbeeld_export(cfg, mappen, n: int = 200, seed: int = 1) -> Path` — from cached BAG: woon-vbo's (`gebruiksdoel` contains `woonfunctie`) that look grondgebonden (no other woon-vbo within 1.0 m and pand area / `aantal_verblijfsobjecten` ≥ 30 m²); address columns from the vbo fields (`openbare_ruimte_naam`, `huisnummer`, `huisletter`, `toevoeging`, `postcode`, `woonplaats_naam`); random sample `n`; writes `invoer/voorbeeld_export.xlsx` with deliberately non-canonical headers (`Eenheid`, `BAG VBO`, `Straatnaam`, `Huisnr`, `Postcode`, `Wijknaam`, `Complexnr`, `Type`) and BAG ids **as numbers** (exercises Task 2). VHE numbers synthetic (`VB00001`…), wijk = `gebied.naam`, complex = perceel id, type `eengezinswoning`. Lets the whole chain run before the real Tobias export exists.
   - `stap_alles(cfg, mappen)` = download → tuinen → score → rapport → `terugkoppeling maak`; prints duration per step and total (succescriterium < 1 uur).
   - `stap_opruimen(cfg, mappen, bevestiging: str)` — deletes `uitvoer/<ronde>`, the cache and the Tobias export in `invoer`; requires typing the ronde name; keeps `kolommen.yaml`, `tuincorrecties.gpkg` only with `--bewaar-correcties`.
   - README (Dutch): install without admin, folder setup outside OneDrive, first-time flow (`inspecteer` → edit `kolommen.yaml` → `download` → `tuinen` → check in QGIS → `score` → `rapport` → `terugkoppeling maak/lees` → `opruimen`), privacy rules from the spec's PoC *Voorwaarden*.

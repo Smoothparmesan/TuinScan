@@ -1,7 +1,7 @@
 # HANDOFF — Tuinscan
 
 ## Status (2026-11-25)
-- PoC build plan written: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md` (16 tasks). No code yet.
+- PoC build plan written (PDOK values pinned): `docs/superpowers/plans/2026-11-25-tuinscan-poc.md` (16 tasks). No code yet.
 - Spec: "Specsheet Tuinscan" doc — https://claude.ai/artifact/H4Wmv6QW3E4iU3wH7tZ94X
 
 ## Key decisions
@@ -12,9 +12,12 @@
 - Missing signal = 0 contribution + "ontbrekend" flag (never inflates the score).
 - Added Pillow (thumbnails, outlines) on top of the spec's package list.
 
+- PDOK verified 2026-11-25 (`docs/pdok-bronnen.md`): `ortho25`/`ortho25IR` = summer (leaf-on), `orthoHR` = winter. Summer CIR exists (spec says it doesn't) → vegetation mask uses summer NDVI + ExG; NDVI start threshold 0.2.
+- BAG vbo → pand via `pand.href` ↔ pand feature id (no `pandidentificatie` field).
+- AHN: only "actueel" on PDOK, no previous version → S4a "nieuw t.o.v. vorige AHN" not possible in PoC.
+
 ## Open issues
-- PDOK is blocked from the cloud container → Task 6 (verify layer names, BGT/BAG fields, AHN COG index, `/vsicurl/` behind the proxy) must run on the work laptop.
-- Whether PDOK offers the summer (leaf-on) RGB layer via WMTS: verify in Task 6.
+- Task 6 (laptop only): `/vsicurl/` and PDOK behind the corporate proxy; QGIS alignment check for the real wijk.
 
 ## Next steps
 1. Review plan, choose execution method.
