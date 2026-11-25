@@ -1,0 +1,42 @@
+[project]
+name = "tuinscan"
+version = "0.1.0"
+description = "Tuinscan: rangschikt tuinen van huurwoningen op basis van open PDOK-geodata"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "geopandas",
+    "shapely>=2",
+    "pyogrio",
+    "rasterio",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "openpyxl",
+    "pyyaml",
+    "jinja2",
+    "requests",
+    "pillow",
+]
+
+[project.scripts]
+tuinscan = "tuinscan.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tuinscan"]
+
+[dependency-groups]
+dev = ["pytest", "responses", "ruff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

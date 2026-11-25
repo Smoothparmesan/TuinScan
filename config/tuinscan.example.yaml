@@ -1,0 +1,69 @@
+gebied: {naam: proefwijk, bbox_rd: [120000, 485300, 120600, 485800], buffer_m: 50}
+mappen: {invoer: C:/TuinscanData/invoer, cache: C:/TuinscanData/cache, uitvoer: C:/TuinscanData/uitvoer}
+tobias:
+  bestand: tobias_export.xlsx
+  blad: null          # null = first sheet
+  kopregel: null      # null = auto-detect (1-based row number otherwise)
+  kolommen_bestand: kolommen.yaml   # in invoer/, produced by `tuinscan inspecteer`
+  filters: {wijk: [], complex: [], woningtype: [], eigen_tuin_ja: [], status_uitsluiten: [], sloop_renovatie_uitsluiten: []}
+pdok:
+  bag_url: https://api.pdok.nl/kadaster/bag/ogc/v2
+  brk_url: https://api.pdok.nl/kadaster/brk-kadastrale-kaart/ogc/v1
+  bgt_url: https://api.pdok.nl/lv/bgt/ogc/v1
+  collecties: {pand: pand, verblijfsobject: verblijfsobject, perceel: perceel, wegdeel: wegdeel, begroeid: begroeidterreindeel}
+  velden:
+    vbo_id: identificatie
+    vbo_pand_href: pand.href          # list of URLs; last segment = pand feature id
+    vbo_gebruiksdoel: gebruiksdoel
+    woonfunctie: woonfunctie
+    pand_id: identificatie
+    pand_aantal_vbo: aantal_verblijfsobjecten
+    perceel_id: identificatie_lokaal_id
+    wegdeel_functie: functie
+    begroeid_fysiek: fysiek_voorkomen
+  voetpad_functies: [voetpad, voetgangersgebied, "voetpad op trap"]
+  openbaar_groen_fysiek: [groenvoorziening, loofbos, "gemengd bos", naaldbos, struiken, houtwal, "grasland overig"]
+  workers: 4
+luchtfoto:
+  rgb_wmts: https://service.pdok.nl/hwh/luchtfotorgb/wmts/v1_0
+  cir_wmts: https://service.pdok.nl/hwh/luchtfotocir/wmts/v1_0
+  matrixset: "EPSG:28992"
+  lagen:              # verified 2026-11-25; ortho25(IR) = summer, orthoHR = winter
+    zomer_nu: {laag: 2025_ortho25, jaar: 2025, zoom: "14"}
+    zomer_vorig: {laag: 2024_ortho25, jaar: 2024, zoom: "14"}
+    cir_nu: {laag: 2025_ortho25IR, jaar: 2025, zoom: "14"}      # summer CIR
+    cir_vorig: {laag: 2024_ortho25IR, jaar: 2024, zoom: "14"}
+    winter_nu: {laag: 2026_orthoHR, jaar: 2026, zoom: "15"}     # detail images only
+    winter_vorig: {laag: 2025_orthoHR, jaar: 2025, zoom: "15"}
+ahn:
+  versie: "AHN actueel (PDOK, stand 2026-11)"
+  dtm_index: https://service.pdok.nl/rws/actueel-hoogtebestand-nederland/atom/downloads/dtm_05m/kaartbladindex.json
+  dsm_index: https://service.pdok.nl/rws/actueel-hoogtebestand-nederland/atom/downloads/dsm_05m/kaartbladindex.json
+  url_veld: url
+  vorige: null        # optional {versie, dtm_index, dsm_index}; PDOK feed has no previous version
+tuin: {delen: [voor], max_diepte_m: 25, voorzijde_zoekafstand_m: 30, min_oppervlak_m2: 5}
+signalen:
+  resolutie_m: 0.25
+  exg_drempel: 0.05
+  ndvi_drempel: 0.2   # spec says 0.3; PDOK JPEG CIR measured lower (crown median 0.27-0.33)
+  schaduw_helderheid: 40
+  s2_hoogte_m: 2.0
+  s3_hoogte_m: 1.0
+  s3_buffer_m: 1.5
+  s4a_hoogte_m: 1.5
+  s4a_min_m2: 2.0
+  s4a_vorige_max_m: 1.0
+  s4a_standaardberging_max_m2: 10
+score:   # gewicht, onder, boven
+  S1: {gewicht: 25, onder: 0.0, boven: 0.30}
+  S2: {gewicht: 20, onder: 0.05, boven: 0.40}
+  S3: {gewicht: 20, onder: 0.5, boven: 5.0}
+  S4a: {gewicht: 25, onder: 0.0, boven: 10.0}
+  S5: {gewicht: 10, onder: 0.5, boven: 1.0}
+terugkoppeling:
+  top_n: 20
+  controlegroep_n: 0
+  seed: 42
+  oordeel: [terecht, onterecht]
+  oorzaak: ["verwaarlozing", "overhang", "bouwwerk", "verharding", "rommel/grofvuil", "schaduw", "straatboom/openbaar groen", "tuinvlak verkeerd", "toegestaan (ZAV/vergunning)", "beeld verouderd", "overig"]
+  actie: ["geen actie", "gesprek", "zaak geopend", "al bekend"]
