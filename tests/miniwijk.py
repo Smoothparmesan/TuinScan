@@ -12,6 +12,14 @@ y = 0 is de rand voetpad/perceel, noord = achterkant.
     y= 2 +-------------------+----------------+-----+-------------+
          voetpad (y 0..2)
          rijbaan lokale weg (y -6..0)
+
+Rasters (Task 9; zie RASTER_* hieronder): luchtfoto's als WMTS-mozaïek (3 x uint8,
+0,21 m; winter 0,105 m; pixelraster vanaf de WMTS-oorsprong, interne mask) en AHN
+(float32, 0,5 m, nodata float32-max; DTM nodata onder de panden).
+    verharding (grijs) overal, daken op de panden, gras op het openbare groen,
+    GROENVLAK in de achtertuin van R1 (1 m hoog; vorige zomer alleen de onderste helft),
+    HAAG langs de voetpadrand van de voortuin van R2 (2,5 m hoog, 1 m over het voetpad),
+    BLOK in de achtertuin van P2 (2 m hoog, 4 m², donkergrijs; vorige zomer afwezig).
 """
 
 from __future__ import annotations
@@ -20,13 +28,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
+import rasterio
 import yaml
 from openpyxl import Workbook
+from rasterio.transform import from_origin
 from shapely.geometry import MultiPolygon, Point, box
 
 from tuinscan.config import Config, laad_config
-from tuinscan.download import VECTOR_SLEUTELS, _grow, lees_vector, manifest_pad, schrijf_vector
+from tuinscan.download import (
+    LUCHTFOTO_SLEUTELS,
+    VECTOR_SLEUTELS,
+    _grow,
+    lees_vector,
+    manifest_pad,
+    raster_pad,
+    schrijf_vector,
+)
 from tuinscan.fouten import Foutenlijst
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.cache import Manifest, vector_pad
@@ -64,6 +83,28 @@ VBO_IDS = {"R1": "0363010000000011", "R2": "0363010000000012", "R3": "0363010000
            "V": "0363010000000021"}  # fmt: skip
 VHE_NUMMERS = {"R1": "100001", "R2": "100002", "R3": "100003", "V": "100004"}
 
+# --- rasters (Task 9) ---------------------------------------------------------------
+WMTS_OORSPRONG = (-285401.92, 903401.92)  # pixelraster luchtfoto's (matrixset EPSG:28992)
+RASTER_RES = {"zomer_nu": 0.21, "zomer_vorig": 0.21, "cir_nu": 0.21, "cir_vorig": 0.21,
+              "winter_nu": 0.105, "winter_vorig": 0.105}  # fmt: skip
+AHN_RES = 0.5
+AHN_NODATA = float(np.finfo(np.float32).max)  # 3.4028235e38
+GROND_Z = -0.5  # maaiveld (DTM) overal, m NAP
+GROENVLAK_R1 = (1, 20, 5, 30)  # achtertuin R1, begroeiing 1,0 m
+GROENVLAK_R1_VORIG = (1, 20, 5, 25)  # vorige zomer: alleen de onderste helft groen
+HAAG_R2 = (6.5, 1, 11.5, 3)  # voortuin R2 (y 2-3) + 1 m over het voetpad (y 1-2), 2,5 m
+BLOK_P2 = (22, 22, 24, 24)  # achtertuin P2: 4 m², 2,0 m, niet groen; vorige zomer afwezig
+HOOGTE = {"rij": 9.0, "vrijstaand": 7.0, "schuur": 2.5, "groen": 0.1, "groenvlak": 1.0,
+          "haag": 2.5, "blok": 2.0}  # fmt: skip  # m boven maaiveld (DSM - DTM)
+# kleuren per klasse: RGB (R, G, B) zomer, CIR (NIR, rood, groen), RGB winter (bladloos)
+KLEUR_RGB = {"verharding": (128, 128, 128), "dak": (150, 70, 60), "gras": (90, 150, 60),
+             "groen": (60, 140, 50), "blok": (90, 90, 90)}  # fmt: skip
+KLEUR_CIR = {"verharding": (110, 120, 120), "dak": (90, 150, 70), "gras": (180, 80, 140),
+             "groen": (200, 60, 130), "blok": (80, 90, 90)}  # fmt: skip
+KLEUR_WINTER = {"verharding": (128, 128, 128), "dak": (150, 70, 60), "gras": (110, 120, 80),
+                "groen": (120, 100, 80), "blok": (90, 90, 90)}  # fmt: skip
+AHN_SLEUTELS = ("ahn_dtm", "ahn_dsm")
+
 EXPORT_KOP = ["Eenheid", "BAG VBO", "Wijknaam", "Complexnr", "Soort woning", "Straat", "Huisnr",
               "Postcode", "Plaats"]  # fmt: skip
 KOLOMMEN = {
@@ -96,6 +137,7 @@ class MiniWijk:
     pand_feature_ids: dict[str, str] = field(default_factory=lambda: dict(PAND_FEATURE_IDS))
     vbo_ids: dict[str, str] = field(default_factory=lambda: dict(VBO_IDS))
     vhe_nummers: dict[str, str] = field(default_factory=lambda: dict(VHE_NUMMERS))
+    rasters: dict[str, Path] = field(default_factory=dict)  # cache-sleutel -> GeoTIFF
 
 
 def rd(x: float, y: float) -> tuple[float, float]:
@@ -143,6 +185,95 @@ def _vectoren() -> dict[str, gpd.GeoDataFrame]:
             "bgt_wegdeel": wegdelen, "bgt_begroeid": begroeid}  # fmt: skip
 
 
+def _raster_vlakken(vorig: bool) -> list[tuple[str, tuple, str]]:
+    """(klasse, relatieve rechthoek, hoogte-sleutel) in tekenvolgorde (later wint)."""
+    vlakken = [("dak", PANDEN[p], p) for p in PANDEN]
+    vlakken += [("gras", GROEN, "groen"),
+                ("groen", GROENVLAK_R1_VORIG if vorig else GROENVLAK_R1, "groenvlak"),
+                ("groen", HAAG_R2, "haag")]  # fmt: skip
+    if not vorig:
+        vlakken.append(("blok", BLOK_P2, "blok"))
+    return vlakken
+
+
+def _centra(x0: float, y1: float, res: float, b: int, h: int):
+    """Pixelcentra in relatieve fixture-coördinaten (x 1-D, y 1-D)."""
+    xs = x0 + (np.arange(b) + 0.5) * res - OORSPRONG[0]
+    ys = y1 - (np.arange(h) + 0.5) * res - OORSPRONG[1]
+    return xs, ys
+
+
+def _in(xs, ys, r) -> np.ndarray:
+    return ((ys >= r[1]) & (ys < r[3]))[:, None] & ((xs >= r[0]) & (xs < r[2]))[None, :]
+
+
+def _schrijf_luchtfoto(pad: Path, sleutel: str, bbox) -> None:
+    res = RASTER_RES[sleutel]
+    ox, oy = WMTS_OORSPRONG
+    c0, c1 = np.floor((bbox[0] - ox) / res), np.ceil((bbox[2] - ox) / res)
+    r0, r1 = np.floor((oy - bbox[3]) / res), np.ceil((oy - bbox[1]) / res)
+    x0, y1 = ox + c0 * res, oy - r0 * res
+    b, h = int(c1 - c0), int(r1 - r0)
+    xs, ys = _centra(x0, y1, res, b, h)
+    kleur = (KLEUR_CIR if sleutel.startswith("cir_") else
+             KLEUR_WINTER if sleutel.startswith("winter_") else KLEUR_RGB)  # fmt: skip
+    data = np.empty((3, h, b), dtype=np.uint8)
+    data[:] = np.array(kleur["verharding"], dtype=np.uint8)[:, None, None]
+    for klasse, r, _ in _raster_vlakken(vorig=sleutel.endswith("_vorig")):
+        data[:, _in(xs, ys, r)] = np.array(kleur[klasse], dtype=np.uint8)[:, None]
+    pad.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rasterio.open(
+            pad, "w", driver="GTiff", width=b, height=h, count=3, dtype="uint8",
+            crs="EPSG:28992", transform=from_origin(x0, y1, res, res), nodata=0,
+            tiled=True, blockxsize=256, blockysize=256, compress="deflate",
+        ) as dst:  # fmt: skip
+            dst.write(data)
+            dst.write_mask(np.full((h, b), 255, dtype=np.uint8))
+
+
+def _schrijf_ahn(pad: Path, sleutel: str, bbox) -> None:
+    res = AHN_RES
+    x0, x1 = np.floor(bbox[0] / res) * res, np.ceil(bbox[2] / res) * res
+    y0, y1 = np.floor(bbox[1] / res) * res, np.ceil(bbox[3] / res) * res
+    b, h = int(round((x1 - x0) / res)), int(round((y1 - y0) / res))
+    xs, ys = _centra(x0, y1, res, b, h)
+    data = np.full((h, b), GROND_Z, dtype=np.float32)
+    for _, r, hoogte in _raster_vlakken(vorig=False):
+        if sleutel == "ahn_dtm":
+            if hoogte in PANDEN:
+                data[_in(xs, ys, r)] = AHN_NODATA
+        else:
+            data[_in(xs, ys, r)] = GROND_Z + HOOGTE[hoogte]
+    with rasterio.open(
+        pad, "w", driver="GTiff", width=b, height=h, count=1, dtype="float32",
+        crs="EPSG:28992", transform=from_origin(x0, y1, res, res), nodata=AHN_NODATA,
+        tiled=True, blockxsize=256, blockysize=256, compress="deflate",
+    ) as dst:  # fmt: skip
+        dst.write(data[np.newaxis])
+
+
+def _schrijf_rasters(cfg: Config, mappen: Mappen, manifest: Manifest, bbox) -> dict[str, Path]:
+    """Synthetische GeoTIFFs in cache/raster + manifest, zoals de download-stap ze schrijft."""
+    paden = {}
+    for sleutel in LUCHTFOTO_SLEUTELS:
+        pad = raster_pad(mappen.cache, sleutel)
+        _schrijf_luchtfoto(pad, sleutel, bbox)
+        url = cfg.luchtfoto.cir_wmts if sleutel.startswith("cir_") else cfg.luchtfoto.rgb_wmts
+        manifest.registreer(
+            sleutel, url, bbox, {"laag": cfg.luchtfoto.lagen[sleutel]["laag"],
+                                 "tegels_totaal": 1, "tegels_mislukt": 0},
+        )  # fmt: skip
+        paden[sleutel] = pad
+    for sleutel in AHN_SLEUTELS:
+        pad = raster_pad(mappen.cache, sleutel)
+        _schrijf_ahn(pad, sleutel, bbox)
+        url = cfg.ahn.dtm_index if sleutel == "ahn_dtm" else cfg.ahn.dsm_index
+        manifest.registreer(sleutel, url, bbox, {"kaartbladen": ["synthetisch"]})
+        paden[sleutel] = pad
+    return paden
+
+
 def _schrijf_export(invoer: Path, cfg: Config) -> None:
     wb = Workbook()
     ws = wb.active
@@ -158,7 +289,7 @@ def _schrijf_export(invoer: Path, cfg: Config) -> None:
 
 
 def maak_miniwijk(basis: Path) -> MiniWijk:
-    """Schrijf config, export, kolommen.yaml, vector-GPKG's en manifest onder `basis`."""
+    """Schrijf config, export, kolommen.yaml, vector-GPKG's, raster-GeoTIFFs en manifest."""
     data = yaml.safe_load(VOORBEELD.read_text(encoding="utf-8"))
     data["gebied"] = {
         "naam": "miniwijk",
@@ -186,10 +317,12 @@ def maak_miniwijk(basis: Path) -> MiniWijk:
         )  # fmt: skip
         gelezen[sleutel] = lees_vector(pad)
 
+    rasters = _schrijf_rasters(cfg, mappen, manifest, bbox)
     _schrijf_export(mappen.invoer, cfg)
     vhes = lees_vhes(cfg, mappen, Foutenlijst())
     return MiniWijk(
         cfg=cfg, mappen=mappen, config_pad=config_pad, vhes=vhes,
         vbo=gelezen["bag_vbo"], panden=gelezen["bag_pand"], percelen=gelezen["brk_perceel"],
         wegdelen=gelezen["bgt_wegdeel"], begroeid=gelezen["bgt_begroeid"], bbox=bbox,
+        rasters=rasters,
     )  # fmt: skip
