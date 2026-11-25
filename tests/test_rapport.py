@@ -83,3 +83,15 @@ def test_lean_caption_under_thumbnails(miniwijk):
 def test_report_lists_ahn_kaartbladen(miniwijk):
     html, _ = _bouw(miniwijk)
     assert "AHN-kaartbladen: synthetisch" in html
+
+
+def test_report_shows_contribution_per_signal(miniwijk):
+    def wijzig(sc):
+        for k in ("S1", "S2", "S3", "S4a", "S5"):
+            sc[f"bijdrage_{k}"] = 0.0
+        sc.loc[sc.index[0], "bijdrage_S4a"] = 17.5
+        sc.loc[sc.index[0], "bijdrage_S2"] = 3.25
+
+    html, _ = _bouw(miniwijk, wijzig)
+    assert re.findall(r"Bijdrage: [^<]*", html) in (["Bijdrage: S4a 17.5, S2 3.2"],
+                                                     ["Bijdrage: S4a 17.5, S2 3.3"])  # fmt: skip

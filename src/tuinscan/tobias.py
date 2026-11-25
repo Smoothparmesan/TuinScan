@@ -27,6 +27,16 @@ ALLE_VELDEN = VERPLICHT + ADRES_VELDEN + OPTIONEEL
 
 STAP = "tobias"
 BAG_HINT = "BAG-id mogelijk afgerond door Excel; exporteer de kolom als tekst"
+# Excel bewaart 15 significante cijfers: een BAG-id met gemeentecode >= 1000 (16 cijfers
+# zonder voorloopnul) verliest dan zijn laatste cijfer, dat 0 wordt. Bij toeval eindigt ~10 %
+# op 0; pas ruim daarboven is afronding waarschijnlijk.
+AFRONDING_AANDEEL = 0.25
+AFRONDING_MIN_N = 10
+AFRONDING_TEKST = (
+    "{n} van {totaal} BAG-id's met gemeentecode >= 1000 eindigen op 0: waarschijnlijk door "
+    "Excel afgerond (15 cijfers). Koppelingen kunnen naar het verkeerde adres wijzen; "
+    "exporteer de BAG-kolom als tekst"
+)
 _BAG_VBO = re.compile(r"\d{4}01\d{10}")
 _POSTCODE = re.compile(r"\d{4}\s?[A-Za-z]{2}")
 _HEADER_RIJEN = 15
@@ -268,6 +278,16 @@ def _filter(df: pd.DataFrame, filters: dict[str, list]) -> pd.DataFrame:
     return df
 
 
+def _controleer_afronding(bag_ids: list[str], fouten: Foutenlijst) -> None:
+    """Eén waarschuwing (log + foutenlijst, VHE '*') als Excel-afronding waarschijnlijk is."""
+    lang = [b for b in bag_ids if int(b[:4]) >= 1000]
+    nul = sum(b.endswith("0") for b in lang)
+    if len(lang) >= AFRONDING_MIN_N and nul / len(lang) > AFRONDING_AANDEEL:
+        melding = AFRONDING_TEKST.format(n=nul, totaal=len(lang))
+        log.warning(melding)
+        fouten.voeg_toe("*", STAP, melding)
+
+
 def lees_vhes(cfg: Config, mappen: Mappen, fouten: Foutenlijst) -> pd.DataFrame:
     """Lees de export en pas mapping en filters toe (schrijven: `schrijf_vhes`)."""
     t = cfg.tobias
@@ -306,6 +326,7 @@ def lees_vhes(cfg: Config, mappen: Mappen, fouten: Foutenlijst) -> pd.DataFrame:
         rij["adres"] = _adres(rij, mapping)
         rijen.append(rij)
 
+    _controleer_afronding([r["bag_vbo_id"] for r in rijen], fouten)
     kern = ["vhe_nummer", "bag_vbo_id", "adres", "wijk", "complex", "woningtype"]
     opt = [v for v in OPTIONEEL if v in mapping]
     uit = pd.DataFrame(rijen, columns=kern + opt)

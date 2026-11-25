@@ -23,6 +23,18 @@ HEADERS = [
     "Redencodes", "Bezoekdatum", "Oordeel", "Oorzaak", "Actie",
 ]  # fmt: skip
 BREEDTES = [9, 6, 12, 28, 16, 8, 36, 36, 14, 13, 12, 28, 16]
+BIJDRAGE_BREEDTE = 11
+NA_REDENEN = HEADERS.index("Reden 2") + 1  # bijdragekolommen staan direct na de redenen
+
+
+def koppen(cfg: Config) -> list[str]:
+    """Kolomkoppen van het blad: vaste koppen plus 'Bijdrage <signaal>' na de redenen."""
+    return [*HEADERS[:NA_REDENEN], *(f"Bijdrage {k}" for k in cfg.score), *HEADERS[NA_REDENEN:]]
+
+
+def _bijdrage(r, k: str) -> float | None:
+    w = getattr(r, f"bijdrage_{k}", None)
+    return None if w is None or pd.isna(w) else round(float(w), 1)
 RIJEN = 1000
 CRITERIUM = 0.5
 
@@ -72,19 +84,24 @@ def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = BLAD
-    ws.append(HEADERS)
+    kop = koppen(cfg)
+    ws.append(kop)
     for c in ws[1]:
         c.font = Font(bold=True)
     for r in lijst.itertuples():
         ws.append([
             r.groep, int(r.rang_in_wijk), str(r.vhe_nummer), _tekst(r.adres), _tekst(r.wijk),
             round(float(r.score), 1), _tekst(r.reden_1), _tekst(r.reden_2),
+            *(_bijdrage(r, k) for k in cfg.score),
             _tekst(r.reden_codes), None, None, None, None,
         ])  # fmt: skip
+    datum_kol = kop.index("Bezoekdatum") + 1
     for rij in range(2, rijen_max + 2):
         ws.cell(row=rij, column=3).number_format = "@"
-        ws.cell(row=rij, column=10).number_format = "dd-mm-yyyy"
-    for i, b in enumerate(BREEDTES, start=1):
+        ws.cell(row=rij, column=datum_kol).number_format = "dd-mm-yyyy"
+    breedtes = [*BREEDTES[:NA_REDENEN], *([BIJDRAGE_BREEDTE] * len(cfg.score)),
+                *BREEDTES[NA_REDENEN:]]  # fmt: skip
+    for i, b in enumerate(breedtes, start=1):
         ws.column_dimensions[get_column_letter(i)].width = b
     ws.freeze_panes = "A2"
 
@@ -103,14 +120,15 @@ def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path
             errorTitle=f"Ongeldige {naam}",
             error=f"Kies een waarde uit de lijst voor {naam}.",
         )
-        dv.add(f"{get_column_letter(HEADERS.index(naam) + 1)}2:"
-               f"{get_column_letter(HEADERS.index(naam) + 1)}{rijen_max + 1}")  # fmt: skip
+        letter_blad = get_column_letter(kop.index(naam) + 1)
+        dv.add(f"{letter_blad}2:{letter_blad}{rijen_max + 1}")
         ws.add_data_validation(dv)
     dd = DataValidation(
         type="date", operator="greaterThan", formula1="36526", allow_blank=True,
         showErrorMessage=True, errorTitle="Ongeldige datum", error="Vul een datum in.",
     )  # fmt: skip
-    dd.add(f"J2:J{rijen_max + 1}")
+    datum = get_column_letter(datum_kol)
+    dd.add(f"{datum}2:{datum}{rijen_max + 1}")
     ws.add_data_validation(dd)
     lw.cell(row=1, column=4, value="VHE")
     lw.cell(row=1, column=5, value="Groep")
@@ -130,10 +148,12 @@ def heeft_oordelen(pad: Path) -> bool:
     try:
         wb = openpyxl.load_workbook(pad, read_only=True)
         try:
-            kols = [HEADERS.index(h) for h in ("Bezoekdatum", "Oordeel", "Oorzaak", "Actie")]
+            ws = wb[BLAD]
+            kop = [_norm(c) for c in next(ws.iter_rows(max_row=1, values_only=True))]
+            kols = [kop.index(_norm(h)) for h in ("Bezoekdatum", "Oordeel", "Oorzaak", "Actie")]
             return any(
                 any(len(r) > k and r[k] is not None and str(r[k]).strip() != "" for k in kols)
-                for r in wb[BLAD].iter_rows(min_row=2, values_only=True)
+                for r in ws.iter_rows(min_row=2, values_only=True)
             )
         finally:
             wb.close()
@@ -188,7 +208,7 @@ def lees_terugkoppeling(
     rijen, meldingen = {}, []
     for n, rij in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         vhe, oordeel = cel(rij, "VHE"), cel(rij, "Oordeel")
-        if not any(cel(rij, h) for h in ("Oordeel", "Oorzaak", "Actie")):
+        if not any(cel(rij, h) for h in ("Bezoekdatum", "Oordeel", "Oorzaak", "Actie")):
             continue
         if vhe is None:
             meldingen.append(f"rij {n}: VHE ontbreekt")
@@ -227,8 +247,11 @@ def lees_terugkoppeling(
     return pd.DataFrame(list(rijen.values()), columns=kol), meldingen
 
 
-def kwaliteit(scores: pd.DataFrame, terug: pd.DataFrame) -> pd.DataFrame:
-    """Precisie per signaalcode plus aandeel terecht in top- en controlegroep."""
+def kwaliteit(scores: pd.DataFrame, terug: pd.DataFrame, terecht: str = "terecht") -> pd.DataFrame:
+    """Precisie per signaalcode plus aandeel terecht in top- en controlegroep.
+
+    `terecht` is het positieve oordeel: de eerste waarde van terugkoppeling.oordeel.
+    """
     t = terug.copy()
     t["vhe_nummer"] = t["vhe_nummer"].astype(str)
     if "groep" not in t.columns:
@@ -241,7 +264,7 @@ def kwaliteit(scores: pd.DataFrame, terug: pd.DataFrame) -> pd.DataFrame:
 
     def rij(naam: str, ids) -> dict:
         o = oordeel[oordeel.index.isin(ids)]
-        n, k = len(o), int((o == "terecht").sum())
+        n, k = len(o), int((o == _norm(terecht)).sum())
         return {"onderdeel": naam, "n_beoordeeld": n, "n_terecht": k,
                 "precisie": k / n if n else float("nan")}  # fmt: skip
 
@@ -253,7 +276,7 @@ def kwaliteit(scores: pd.DataFrame, terug: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rijen, columns=["onderdeel", "n_beoordeeld", "n_terecht", "precisie"])
 
 
-def schrijf_kwaliteit(kw: pd.DataFrame, top_n: int, pad: Path) -> None:
+def schrijf_kwaliteit(kw: pd.DataFrame, top_n: int, pad: Path, terecht: str = "terecht") -> None:
     """Schrijf kwaliteit.csv (NaN leeg), druk de tabel en het succescriterium af."""
     with schrijf_atomair(Path(pad)) as tmp:  # Nederlandse Excel: ';' en decimale komma
         kw.to_csv(tmp, index=False, na_rep="", sep=CSV_SEP, decimal=",", encoding=CSV_CODERING)
@@ -262,6 +285,6 @@ def schrijf_kwaliteit(kw: pd.DataFrame, top_n: int, pad: Path) -> None:
     m, k = int(r["n_beoordeeld"]), int(r["n_terecht"])
     gehaald = m > 0 and k / m >= CRITERIUM
     print(
-        f"Top-{top_n} per wijk: {k} van {m} terecht - succescriterium >= 50 %: "
+        f"Top-{top_n} per wijk: {k} van {m} {terecht} - succescriterium >= 50 %: "
         f"{'GEHAALD' if gehaald else 'NIET GEHAALD'}"
     )

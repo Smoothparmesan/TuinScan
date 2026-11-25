@@ -33,6 +33,15 @@ def _tekst(w) -> str | None:
     return None if _leeg(w) else str(w)
 
 
+def _bijdragen(r: dict) -> list[tuple[str, float]]:
+    """(signaal, bijdrage) voor bijdragen > 0, grootste eerst."""
+    uit = []
+    for k, w in r.items():
+        if str(k).startswith("bijdrage_") and not _leeg(w) and float(w) > 0:
+            uit.append((str(k)[len("bijdrage_"):], float(w)))
+    return sorted(uit, key=lambda kv: -kv[1])
+
+
 def bouw_rijen(scores: pd.DataFrame, uitsneden: dict[str, dict[str, Path | None]]) -> list[dict]:
     rijen = []
     for i, r in enumerate(scores.to_dict("records")):
@@ -43,6 +52,7 @@ def bouw_rijen(scores: pd.DataFrame, uitsneden: dict[str, dict[str, Path | None]
             "rang": int(r["rang_in_wijk"]), "adres": _tekst(r["adres"]) or "",
             "complex": _tekst(r["complex"]) or "", "score": float(r["score"]),
             "reden_1": _tekst(r.get("reden_1")), "reden_2": _tekst(r.get("reden_2")),
+            "bijdragen": _bijdragen(r),
             "ontbrekend": [str(s) for s in ([] if _leeg(r.get("ontbrekend")) else r["ontbrekend"])],
             "thumb_nu": data_uri(pad.get("thumb_zomer_nu")),
             "thumb_vorig": data_uri(pad.get("thumb_zomer_vorig")),

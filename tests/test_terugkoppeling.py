@@ -7,7 +7,6 @@ import pytest
 
 from tuinscan.config import laad_config
 from tuinscan.terugkoppeling import (
-    HEADERS,
     kwaliteit,
     lees_terugkoppeling,
     maak_terugkoppelbestand,
@@ -42,8 +41,9 @@ def _lijst(cfg, top=3, controle=2):
 def _vul(pad, waarden):
     wb = openpyxl.load_workbook(pad)
     ws = wb["Terugkoppeling"]
+    koppen = [c.value for c in ws[1]]
     for r, kol, w in waarden:
-        ws.cell(row=r, column=HEADERS.index(kol) + 1, value=w)
+        ws.cell(row=r, column=koppen.index(kol) + 1, value=w)
     wb.save(pad)
 
 
@@ -64,6 +64,7 @@ def test_no_free_text_column(tmp_path, cfg):
     koppen = [c.value for c in ws[1]]
     assert koppen == [
         "Groep", "Rang", "VHE", "Adres", "Wijk", "Score", "Reden 1", "Reden 2",
+        "Bijdrage S1", "Bijdrage S2", "Bijdrage S3", "Bijdrage S4a", "Bijdrage S5",
         "Redencodes", "Bezoekdatum", "Oordeel", "Oorzaak", "Actie",
     ]  # fmt: skip
 
@@ -235,3 +236,52 @@ def test_group_from_list_and_duplicates(tmp_path, cfg):
     terug, msgs = lees_terugkoppeling(pad, cfg)
     assert msgs == ["rij 3: dubbele VHE, laatste telt"]
     assert terug.set_index("vhe_nummer").loc[lijst.vhe_nummer[7], "groep"] == "controle"
+
+
+def test_kwaliteit_uses_first_configured_oordeel_as_positive():
+    scores = pd.DataFrame({"vhe_nummer": ["a", "b"], "reden_codes": [["S3"], ["S3"]]})
+    terug = pd.DataFrame({"vhe_nummer": ["a", "b"], "groep": ["top"] * 2,
+                          "oordeel": ["Klopt", "klopt niet"]})  # fmt: skip
+    kw = kwaliteit(scores, terug, "Klopt").set_index("onderdeel")
+    assert kw.loc["S3", "n_terecht"] == 1 and kw.loc["top_n", "precisie"] == 0.5
+
+
+def test_cli_lees_with_custom_oordeel_labels(tmp_path, capsys):
+    import yaml
+
+    from tuinscan.cli import main
+
+    pad, rd = _ronde(tmp_path, None)
+    data = yaml.safe_load(pad.read_text(encoding="utf-8"))
+    data["terugkoppeling"]["oordeel"] = ["klopt", "klopt niet"]
+    pad.write_text(yaml.safe_dump(data), encoding="utf-8")
+    assert main(["terugkoppeling", "maak", "--config", str(pad)]) == 0
+    _vul(rd / "terugkoppeling.xlsx", [(2, "Oordeel", "klopt"), (3, "Oordeel", "klopt niet")])
+    assert main(["terugkoppeling", "lees", "--config", str(pad)]) == 0
+    assert "1 van 2 klopt" in capsys.readouterr().out
+
+
+def test_row_with_only_visit_date_reports_missing_oordeel(tmp_path, cfg):
+    import datetime
+
+    pad = maak_terugkoppelbestand(_lijst(cfg), cfg, tmp_path / "t.xlsx")
+    _vul(pad, [(2, "Bezoekdatum", datetime.date(2026, 12, 1))])
+    terug, msgs = lees_terugkoppeling(pad, cfg)
+    assert msgs == ["rij 2: Oordeel ontbreekt"] and len(terug) == 0
+
+
+def test_excel_shows_contribution_per_signal(tmp_path, cfg):
+    lijst = _lijst(cfg)
+    lijst["bijdrage_S3"] = 12.345
+    lijst["bijdrage_S1"] = 0.0
+    pad = maak_terugkoppelbestand(lijst, cfg, tmp_path / "t.xlsx")
+    ws = openpyxl.load_workbook(pad)["Terugkoppeling"]
+    koppen = [c.value for c in ws[1]]
+    i = koppen.index("Reden 2")
+    assert koppen[i + 1 : i + 1 + len(cfg.score)] == [f"Bijdrage {k}" for k in cfg.score]
+    assert ws.cell(row=2, column=koppen.index("Bijdrage S3") + 1).value == 12.3
+    assert ws.cell(row=2, column=koppen.index("Bijdrage S2") + 1).value is None  # geen kolom
+    # inlezen werkt op kopnamen, niet op posities
+    _vul(pad, [(2, "Oordeel", "terecht")])
+    terug, msgs = lees_terugkoppeling(pad, cfg)
+    assert msgs == [] and terug["oordeel"].tolist() == ["terecht"]

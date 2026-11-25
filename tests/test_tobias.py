@@ -283,3 +283,34 @@ def test_fout_rows_use_excel_row_numbers(tmp_path):
     lees_vhes(cfg, mappen, fouten)
     assert "rij 5 genegeerd, eerste rij behouden" in fouten.regels[0][2]
     assert fouten.regels[1][0] == "rij 6"
+
+
+def _rijen_met_bag(ids):
+    return [KOP] + [[str(i + 1), b, "N", "C", "t", "S", i + 1, ""] for i, b in enumerate(ids)]
+
+
+def test_excel_rounding_warning_once(tmp_path, caplog):
+    # gemeentecode >= 1000: 16 significante cijfers, Excel bewaart er 15 -> eindigt op 0
+    ids = [f"1234010000{n:05d}0" for n in range(12)]
+    cfg, mappen = maak_omgeving(tmp_path, _rijen_met_bag(ids), MAP)
+    fouten = Foutenlijst()
+    with caplog.at_level(logging.WARNING, logger="tuinscan"):
+        df = lees_vhes(cfg, mappen, fouten)
+    assert len(df) == 12  # de rijen blijven; alleen een waarschuwing
+    regels = [r for r in fouten.regels if r[0] == "*"]
+    assert len(regels) == 1 and regels[0][1] == "tobias" and "Excel" in regels[0][2]
+    assert "afgerond" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        [f"0363010000{n:05d}0" for n in range(12)],  # gemeentecode < 1000: past in 15 cijfers
+        [f"1234010000{n:06d}" for n in range(12)],  # gewone eindcijfers
+    ],
+)
+def test_no_excel_rounding_warning(tmp_path, ids):
+    cfg, mappen = maak_omgeving(tmp_path, _rijen_met_bag(ids), MAP)
+    fouten = Foutenlijst()
+    lees_vhes(cfg, mappen, fouten)
+    assert not [r for r in fouten.regels if r[0] == "*"]

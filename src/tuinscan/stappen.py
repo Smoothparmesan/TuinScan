@@ -368,7 +368,8 @@ def stap_terugkoppeling_lees(cfg: Config, mappen: Mappen, bestand: str | None = 
         print(m)
     scores = pd.read_parquet(rd / "scores.parquet")
     uit = rd / "kwaliteit.csv"
-    schrijf_kwaliteit(kwaliteit(scores, terug), cfg.terugkoppeling.top_n, uit)
+    terecht = cfg.terugkoppeling.oordeel[0]
+    schrijf_kwaliteit(kwaliteit(scores, terug, terecht), cfg.terugkoppeling.top_n, uit, terecht)
     return uit
 
 

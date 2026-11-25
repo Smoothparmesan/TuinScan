@@ -53,6 +53,7 @@ td.adres { font-weight: 600; }
 .balk i { display: block; height: 100%; background: var(--balk); }
 .reden { margin: 0; }
 .reden + .reden { color: var(--zacht); }
+.bijdrage { margin: 2px 0 0; font-size: .8rem; color: var(--zacht); font-variant-numeric: tabular-nums; }
 .thumbs { display: flex; gap: 6px; }
 .thumbs figure { margin: 0; text-align: center; }
 .thumbs img, .thumbs .geen { width: 108px; height: 108px; object-fit: cover; border-radius: 6px;
@@ -137,7 +138,8 @@ footer ul { margin: 4px 0; padding-left: 20px; }
       <td><div class="score"><span>{{ "%.0f"|format(r.score) }}</span>
         <span class="balk"><i style="width: {{ [[r.score, 0]|max, 100]|min }}%"></i></span></div></td>
       <td>{% if r.reden_1 %}<p class="reden">{{ r.reden_1 }}</p>{% endif %}
-          {% if r.reden_2 %}<p class="reden">{{ r.reden_2 }}</p>{% endif %}</td>
+          {% if r.reden_2 %}<p class="reden">{{ r.reden_2 }}</p>{% endif %}
+          {% if r.bijdragen %}<p class="bijdrage">Bijdrage: {% for k, v in r.bijdragen %}{{ k }} {{ "%.1f"|format(v) }}{{ ", " if not loop.last }}{% endfor %}</p>{% endif %}</td>
       <td><div class="thumbs">
         <figure>{% if r.thumb_nu %}<img src="{{ r.thumb_nu }}" alt="Zomer dit jaar" loading="lazy">
           {% else %}<span class="geen">geen beeld</span>{% endif %}<figcaption>nu</figcaption></figure>

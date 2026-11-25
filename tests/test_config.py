@@ -158,3 +158,11 @@ def test_lean_and_halo_bounds(tmp_path, sleutel, waarde):
     pad = _schrijf(tmp_path, lambda d: d["signalen"].update({sleutel: waarde}))
     with pytest.raises(ConfigFout, match=rf"signalen\.{sleutel}"):
         laad_config(pad)
+
+
+def test_score_keys_limited_to_known_signals(tmp_path):
+    def w(d):
+        d["score"]["S4b"] = d["score"].pop("S4a")
+
+    with pytest.raises(ConfigFout, match=r"score\.S4b"):
+        laad_config(_schrijf(tmp_path, w))

@@ -15,6 +15,7 @@ class ConfigFout(Exception):
     """Ongeldige configuratie; de melding noemt de YAML-sleutel."""
 
 
+SIGNALEN = ("S1", "S2", "S3", "S4a", "S5")  # signalen met een score-regel in de PoC
 MAX_PANDMARGE_M = 10.0  # rasters berekent de afstand tot panden tot zover
 
 # Optionele drempels per luchtfotolaag (luchtfoto.lagen.<laag>.<drempel>); zonder waarde
@@ -186,6 +187,10 @@ def _valideer(cfg: Config) -> None:
         raise ConfigFout("gebied.bbox_rd: moet xmin < xmax en ymin < ymax hebben")
     if not cfg.score:
         raise ConfigFout("score: minstens één signaal vereist")
+    onbekend = sorted(set(cfg.score) - set(SIGNALEN))
+    if onbekend:
+        toegestaan = ", ".join(SIGNALEN)
+        raise ConfigFout(f"score.{onbekend[0]}: onbekend signaal; toegestaan: {toegestaan}")
     for naam, r in cfg.score.items():
         if not r.onder < r.boven:
             raise ConfigFout(f"score.{naam}: onder moet kleiner zijn dan boven")
@@ -199,6 +204,8 @@ def _valideer(cfg: Config) -> None:
                 raise ConfigFout(f"ahn.vorige.{k}: ontbreekt")
     if not cfg.tuin.delen or not set(cfg.tuin.delen) <= {"voor", "achter"}:
         raise ConfigFout("tuin.delen: alleen 'voor' en/of 'achter' toegestaan")
+    if not cfg.terugkoppeling.oordeel:
+        raise ConfigFout("terugkoppeling.oordeel: minstens één waarde (de eerste = terecht)")
     s = cfg.signalen
     for naam in ("foto_pandmarge_m", "s4a_pandmarge_m"):
         if not 0 <= getattr(s, naam) <= MAX_PANDMARGE_M:
