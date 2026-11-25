@@ -67,7 +67,7 @@ class _Koppelaar:
         punt = vbo_rij.geometry
         kandidaten = [
             self.pand_per_fid[f]
-            for f in href_ids(vbo_rij[self.v["vbo_pand_href"]])
+            for f in href_ids(vbo_rij.get(self.v["vbo_pand_href"]))
             if f in self.pand_per_fid
         ]
         if len(kandidaten) == 1:

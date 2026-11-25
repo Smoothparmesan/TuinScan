@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -52,7 +53,7 @@ def selecteer_bezoeklijst(
     s["vhe_nummer"] = s["vhe_nummer"].astype(str)
     is_top = s["rang_in_wijk"] <= top_n
     top = s[is_top].assign(groep="top")
-    top = top.sort_values(["rang_in_wijk", "wijk", "vhe_nummer"], key=_sleutel_kolom)
+    top = top.sort_values(["wijk", "rang_in_wijk", "vhe_nummer"], key=_sleutel_kolom)
     rest = s[~is_top]
     k = min(controle_n, len(rest))
     if k > 0:
@@ -95,14 +96,18 @@ def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path
             *(_bijdrage(r, k) for k in cfg.score),
             _tekst(r.reden_codes), None, None, None, None,
         ])  # fmt: skip
+    vhe_kol = kop.index("VHE") + 1
     datum_kol = kop.index("Bezoekdatum") + 1
-    for rij in range(2, rijen_max + 2):
-        ws.cell(row=rij, column=3).number_format = "@"
-        ws.cell(row=rij, column=datum_kol).number_format = "dd-mm-yyyy"
+    formaten = {vhe_kol: "@", datum_kol: "dd-mm-yyyy"}
+    for rij in range(2, len(lijst) + 2):  # gevulde rijen; lege rijen erven het kolomformaat
+        for kol, fmt in formaten.items():
+            ws.cell(row=rij, column=kol).number_format = fmt
     breedtes = [*BREEDTES[:NA_REDENEN], *([BIJDRAGE_BREEDTE] * len(cfg.score)),
                 *BREEDTES[NA_REDENEN:]]  # fmt: skip
     for i, b in enumerate(breedtes, start=1):
         ws.column_dimensions[get_column_letter(i)].width = b
+    for kol, fmt in formaten.items():
+        ws.column_dimensions[get_column_letter(kol)].number_format = fmt
     ws.freeze_panes = "A2"
 
     lw = wb.create_sheet(LIJSTEN)
@@ -168,7 +173,8 @@ def _norm(w: object) -> str:
 def _vhe_tekst(w: object) -> str:
     if isinstance(w, float) and w.is_integer():
         return str(int(w))
-    return str(w).strip()
+    s = str(w).strip()
+    return s[:-2] if re.fullmatch(r"\d+\.0", s) else s
 
 
 def _bekende_vhes(wb, extra) -> dict[str, str]:
@@ -183,66 +189,82 @@ def _bekende_vhes(wb, extra) -> dict[str, str]:
     return bekend
 
 
+def _unieke_zonder_nul(bekend: dict[str, str]) -> dict[int, str]:
+    per_int: dict[int, list[str]] = {}
+    for k in bekend:
+        if k.isdigit():
+            per_int.setdefault(int(k), []).append(k)
+    return {n: ks[0] for n, ks in per_int.items() if len(ks) == 1}
+
+
 def lees_terugkoppeling(
     pad: Path, cfg: Config, bekend_extra=None
 ) -> tuple[pd.DataFrame, list[str]]:
     """Lees het ingevulde bestand; sleutel is de VHE, ongeldige rijen komen in de meldingen."""
     t = cfg.terugkoppeling
     wb = openpyxl.load_workbook(pad, data_only=True)
-    ws = wb[BLAD]
-    koppen = [_norm(c.value) for c in ws[1]]
-    idx = {h: koppen.index(_norm(h)) for h in HEADERS if _norm(h) in koppen}
-    geldig = {
-        "Oordeel": {_norm(w): w for w in t.oordeel},
-        "Oorzaak": {_norm(w): w for w in t.oorzaak},
-        "Actie": {_norm(w): w for w in t.actie},
-    }
+    try:
+        if BLAD not in wb.sheetnames:
+            raise ValueError(f"blad '{BLAD}' ontbreekt in {pad}")
+        ws = wb[BLAD]
+        koppen_rij = [_norm(c.value) for c in ws[1]]
+        idx = {h: koppen_rij.index(_norm(h)) for h in HEADERS if _norm(h) in koppen_rij}
+        ontbrekend = [h for h in ("VHE", "Oordeel") if h not in idx]
+        if ontbrekend:
+            raise ValueError(f"verplichte kolom ontbreekt in '{BLAD}': {', '.join(ontbrekend)}")
+        geldig = {
+            "Oordeel": {_norm(w): w for w in t.oordeel},
+            "Oorzaak": {_norm(w): w for w in t.oorzaak},
+            "Actie": {_norm(w): w for w in t.actie},
+        }
 
-    def cel(rij, h):
-        i = idx.get(h)
-        w = rij[i] if i is not None and i < len(rij) else None
-        return None if w is None or str(w).strip() == "" else w
+        def cel(rij, h):
+            i = idx.get(h)
+            w = rij[i] if i is not None and i < len(rij) else None
+            return None if w is None or str(w).strip() == "" else w
 
-    bekend = _bekende_vhes(wb, bekend_extra)
-    zonder_nul = {int(k): k for k in bekend if k.isdigit()}
-    rijen, meldingen = {}, []
-    for n, rij in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        vhe, oordeel = cel(rij, "VHE"), cel(rij, "Oordeel")
-        if not any(cel(rij, h) for h in ("Bezoekdatum", "Oordeel", "Oorzaak", "Actie")):
-            continue
-        if vhe is None:
-            meldingen.append(f"rij {n}: VHE ontbreekt")
-            continue
-        if oordeel is None:
-            meldingen.append(f"rij {n}: Oordeel ontbreekt")
-            continue
-        v = _vhe_tekst(vhe)
-        if bekend and v not in bekend:
-            v_int = int(v) if v.isdigit() else None
-            if v_int in zonder_nul:
-                v = zonder_nul[v_int]
-            else:
-                meldingen.append(f"rij {n}: VHE '{v}' niet in de lijst")
+        bekend = _bekende_vhes(wb, bekend_extra)
+        zonder_nul = _unieke_zonder_nul(bekend)
+        rijen, meldingen = {}, []
+        for n, rij in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            vhe, oordeel = cel(rij, "VHE"), cel(rij, "Oordeel")
+            if not any(cel(rij, h) for h in ("Bezoekdatum", "Oordeel", "Oorzaak", "Actie")):
                 continue
-        uit, fout = {}, False
-        for veld in ("Oordeel", "Oorzaak", "Actie"):
-            w = cel(rij, veld)
-            if w is None:
-                uit[veld] = None
-            elif _norm(w) in geldig[veld]:
-                uit[veld] = geldig[veld][_norm(w)]
-            else:
-                meldingen.append(f"rij {n}: '{w}' is geen geldige {veld}")
-                fout = True
-        if fout:
-            continue
-        if v in rijen:
-            meldingen.append(f"rij {n}: dubbele VHE, laatste telt")
-        rijen[v] = {
-            "vhe_nummer": v, "groep": _tekst(cel(rij, "Groep")) or bekend.get(v) or "top",
-            "bezoekdatum": cel(rij, "Bezoekdatum"), "oordeel": uit["Oordeel"],
-            "oorzaak": uit["Oorzaak"], "actie": uit["Actie"],
-        }  # fmt: skip
+            if vhe is None:
+                meldingen.append(f"rij {n}: VHE ontbreekt")
+                continue
+            if oordeel is None:
+                meldingen.append(f"rij {n}: Oordeel ontbreekt")
+                continue
+            v = _vhe_tekst(vhe)
+            if bekend and v not in bekend:
+                v_int = int(v) if v.isdigit() else None
+                if v_int in zonder_nul:
+                    v = zonder_nul[v_int]
+                else:
+                    meldingen.append(f"rij {n}: VHE '{v}' niet in de lijst")
+                    continue
+            uit, fout = {}, False
+            for veld in ("Oordeel", "Oorzaak", "Actie"):
+                w = cel(rij, veld)
+                if w is None:
+                    uit[veld] = None
+                elif _norm(w) in geldig[veld]:
+                    uit[veld] = geldig[veld][_norm(w)]
+                else:
+                    meldingen.append(f"rij {n}: '{w}' is geen geldige {veld}")
+                    fout = True
+            if fout:
+                continue
+            if v in rijen:
+                meldingen.append(f"rij {n}: dubbele VHE, laatste telt")
+            rijen[v] = {
+                "vhe_nummer": v, "groep": _tekst(cel(rij, "Groep")) or bekend.get(v) or "top",
+                "bezoekdatum": cel(rij, "Bezoekdatum"), "oordeel": uit["Oordeel"],
+                "oorzaak": uit["Oorzaak"], "actie": uit["Actie"],
+            }  # fmt: skip
+    finally:
+        wb.close()
     kol = ["vhe_nummer", "groep", "bezoekdatum", "oordeel", "oorzaak", "actie"]
     return pd.DataFrame(list(rijen.values()), columns=kol), meldingen
 

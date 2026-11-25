@@ -6,6 +6,7 @@ Tobias-kolomnamen staan nooit in code; alles loopt via canonieke namen die in
 
 import logging
 import re
+import zipfile
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -26,6 +27,7 @@ OPTIONEEL = ("eigen_tuin", "standaardberging", "status", "sloop_renovatie")
 ALLE_VELDEN = VERPLICHT + ADRES_VELDEN + OPTIONEEL
 
 STAP = "tobias"
+ALGEMENE_VHE = "*"
 BAG_HINT = "BAG-id mogelijk afgerond door Excel; exporteer de kolom als tekst"
 # Excel bewaart 15 significante cijfers: een BAG-id met gemeentecode >= 1000 (16 cijfers
 # zonder voorloopnul) verliest dan zijn laatste cijfer, dat 0 wordt. Bij toeval eindigt ~10 %
@@ -74,7 +76,9 @@ class MappingVoorstel:
 
 
 def _leeg(w: object) -> bool:
-    return w is None or (isinstance(w, float) and w != w) or str(w).strip() in ("", "nan", "None")
+    if w is None or w is pd.NA or (isinstance(w, float) and w != w):
+        return True
+    return str(w).strip().casefold() in ("", "nan", "none", "<na>")
 
 
 def _is_getal(w: object) -> bool:
@@ -120,8 +124,8 @@ def lees_ruwe_export(pad: Path, blad: str | None, kopregel: int | None) -> pd.Da
         raw = pd.read_excel(pad, sheet_name=blad if blad is not None else 0, header=None, dtype=str)
     except FileNotFoundError as e:
         raise ConfigFout(f"exportbestand niet gevonden: {pad}") from e
-    except ValueError as e:
-        raise ConfigFout(f"{pad}: kan blad {blad!r} niet lezen ({e})") from e
+    except (ValueError, OSError, zipfile.BadZipFile) as e:
+        raise ConfigFout(f"{pad}: kan export niet lezen ({e})") from e
     raw = raw.dropna(axis=1, how="all")  # rijen blijven staan: kopregel telt originele rijen
     if kopregel is not None:
         if not 1 <= kopregel <= len(raw):
@@ -285,7 +289,7 @@ def _controleer_afronding(bag_ids: list[str], fouten: Foutenlijst) -> None:
     if len(lang) >= AFRONDING_MIN_N and nul / len(lang) > AFRONDING_AANDEEL:
         melding = AFRONDING_TEKST.format(n=nul, totaal=len(lang))
         log.warning(melding)
-        fouten.voeg_toe("*", STAP, melding)
+        fouten.voeg_toe(ALGEMENE_VHE, STAP, melding)
 
 
 def lees_vhes(cfg: Config, mappen: Mappen, fouten: Foutenlijst) -> pd.DataFrame:

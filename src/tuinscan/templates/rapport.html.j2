@@ -190,6 +190,20 @@ footer ul { margin: 4px 0; padding-left: 20px; }
       s.style.display = (!keuze.value || s.dataset.wijk === keuze.value) ? "" : "none";
     });
   });
+  function sluitOverlay() {
+    if (!location.hash.startsWith("#d-")) return;
+    var y = window.scrollY;
+    location.hash = "";
+    window.scrollTo(0, y);
+  }
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") sluitOverlay();
+  });
+  document.querySelectorAll(".overlay").forEach(function (el) {
+    el.addEventListener("click", function (ev) {
+      if (ev.target === el) sluitOverlay();
+    });
+  });
 })();
 </script>
 </body>

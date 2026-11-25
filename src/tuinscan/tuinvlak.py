@@ -196,14 +196,24 @@ def _halfvlakken(muur: LineString, doos: Polygon) -> tuple[BaseGeometry, BaseGeo
     """Twee helften van `doos`, gesneden door de muur verlengd langs zijn eigen richting."""
     x0, y0, x1, y1 = doos.bounds
     lengte = 2 * math.hypot(x1 - x0, y1 - y0)
-    c = list(muur.coords)
+    c: list[tuple[float, ...]] = []
+    for pt in muur.coords:
+        if not c or math.hypot(pt[0] - c[-1][0], pt[1] - c[-1][1]) > 1e-6:
+            c.append(pt)
+    if len(c) < 2:
+        return None
 
     def verleng(p, q):  # voorbij p, in richting q → p
         dx, dy = p[0] - q[0], p[1] - q[1]
         d = math.hypot(dx, dy)
+        if d < 1e-9:
+            return None
         return (p[0] + dx / d * lengte, p[1] + dy / d * lengte)
 
-    lijn = LineString([verleng(c[0], c[1]), *c, verleng(c[-1], c[-2])])
+    begin, eind = verleng(c[0], c[1]), verleng(c[-1], c[-2])
+    if begin is None or eind is None:
+        return None
+    lijn = LineString([begin, *c, eind])
     delen = list(split(doos, lijn).geoms)
     return (delen[0], delen[1]) if len(delen) == 2 else None
 
@@ -235,24 +245,11 @@ def _muurcorrectie(cellen: dict, info: dict, panden: gpd.GeoDataFrame, perceel) 
     return cellen
 
 
-def splits_perceel(
-    perceel_geom: BaseGeometry,
-    zaden: gpd.GeoDataFrame,
-    panden: gpd.GeoDataFrame,
-    max_diepte_m: float,
-) -> dict[str, BaseGeometry]:
-    """Tuinvlak per vbo-id: cel van het zaad (Voronoi, op scheidingsmuren gecorrigeerd)
-    ∩ perceel − alle panden ∩ buffer(eigen pand of zaad, max_diepte_m).
-    Eén (samengevoegd) zaad → het hele perceel. Zaden op hetzelfde punt delen hun cel."""
+def _ruwe_cellen(
+    perceel_geom: BaseGeometry, zaden: gpd.GeoDataFrame, panden: gpd.GeoDataFrame
+) -> tuple[BaseGeometry, dict[tuple[float, float], BaseGeometry], list[tuple[float, float]]]:
     if not perceel_geom.is_valid:
         perceel_geom = _vlakken(shapely.make_valid(perceel_geom))
-    if panden.empty:
-        vrij = perceel_geom
-    else:
-        raak = panden.sindex.query(perceel_geom, predicate="intersects")
-        bebouwd = shapely.union_all(panden.geometry.values[raak]) if len(raak) else None
-        vrij = perceel_geom.difference(bebouwd) if bebouwd is not None else perceel_geom
-
     punten = [(z.x, z.y) for z in zaden.geometry]
     info: dict[tuple[float, float], tuple[object, bool]] = {}
     for punt, p, enkel in zip(punten, zaden["pand"], zaden["enkel"], strict=True):
@@ -264,6 +261,28 @@ def splits_perceel(
         vor = shapely.voronoi_polygons(MultiPoint(uniek), extend_to=perceel_geom, ordered=True)
         cellen = dict(zip(uniek, shapely.get_parts(vor), strict=True))
         cellen = _muurcorrectie(cellen, info, panden, perceel_geom)
+    return perceel_geom, cellen, punten
+
+
+def splits_perceel(
+    perceel_geom: BaseGeometry,
+    zaden: gpd.GeoDataFrame,
+    panden: gpd.GeoDataFrame,
+    max_diepte_m: float,
+    *,
+    ruw: tuple[BaseGeometry, dict, list] | None = None,
+) -> dict[str, BaseGeometry]:
+    """Tuinvlak per vbo-id: cel van het zaad (Voronoi, op scheidingsmuren gecorrigeerd)
+    ∩ perceel − alle panden ∩ buffer(eigen pand of zaad, max_diepte_m).
+    Eén (samengevoegd) zaad → het hele perceel. Zaden op hetzelfde punt delen hun cel.
+    `ruw` = eerder berekende `_ruwe_cellen` (voorkomt een tweede Voronoi)."""
+    perceel_geom, cellen, punten = ruw or _ruwe_cellen(perceel_geom, zaden, panden)
+    if panden.empty:
+        vrij = perceel_geom
+    else:
+        raak = panden.sindex.query(perceel_geom, predicate="intersects")
+        bebouwd = shapely.union_all(panden.geometry.values[raak]) if len(raak) else None
+        vrij = perceel_geom.difference(bebouwd) if bebouwd is not None else perceel_geom
 
     uit: dict[str, BaseGeometry] = {}
     for rij, punt in zip(zaden.itertuples(), punten, strict=True):
@@ -273,7 +292,14 @@ def splits_perceel(
     return uit
 
 
-def _voorvector(pand_geom, vbo_punt, wegdelen, zoekafstand_m) -> tuple[float, float] | None:
+def _voorvector(
+    pand_geom,
+    vbo_punt,
+    wegdelen,
+    zoekafstand_m,
+    *,
+    anker: Point | None = None,
+) -> tuple[float, float] | None:
     if wegdelen.empty or vbo_punt is None or vbo_punt.is_empty:
         return None
     pos = wegdelen.sindex.query(vbo_punt, predicate="dwithin", distance=zoekafstand_m)
@@ -281,7 +307,7 @@ def _voorvector(pand_geom, vbo_punt, wegdelen, zoekafstand_m) -> tuple[float, fl
         return None
     kandidaten = wegdelen.geometry.values[pos]
     w = kandidaten[int(shapely.distance(kandidaten, vbo_punt).argmin())]
-    c = pand_geom.centroid
+    c = pand_geom.centroid if anker is None else anker
     p = nearest_points(w, c)[0]
     dx, dy = p.x - c.x, p.y - c.y
     lengte = math.hypot(dx, dy)
@@ -297,25 +323,25 @@ def deel_voor_achter(
     *,
     fouten: Foutenlijst | None = None,
     vhe_nummer: str = "",
+    anker: Point | None = None,
 ) -> list[tuple[Deel, BaseGeometry]]:
     """Splits een tuin in voor (wegkant) en achter.
 
-    Voorvector = van de pandcentroïde naar het dichtstbijzijnde punt van het wegdeel
-    (elke functie, ook voetpad) dat het dichtst bij het vbo-punt ligt, binnen
-    `zoekafstand_m`. Een tuindeel is `voor` als `dot(centroïde − pandcentroïde, voor) > 0`.
-    Een deel dat de lijn door de pandcentroïde (loodrecht op de voorvector) kruist, wordt
-    op die lijn gesneden; zo krijgt een vrijstaand huis met een tuin rondom ook een
-    voortuin. Geen wegdeel → alles `achter` + fout "voorzijde niet bepaald".
+    Voorvector = van het ankerpunt (standaard de pandcentroïde) naar het dichtstbijzijnde
+    punt van het wegdeel (elke functie, ook voetpad) dat het dichtst bij `vbo_punt` ligt,
+    binnen `zoekafstand_m`.
+    Een deel dat de lijn door het ankerpunt (loodrecht op de voorvector) kruist, wordt op
+    die lijn gesneden. Geen wegdeel → alles `achter` + fout "voorzijde niet bepaald".
     """
     tuin = _vlakken(tuin)
     if tuin.is_empty:
         return []
-    f = _voorvector(pand_geom, vbo_punt, wegdelen, zoekafstand_m)
+    f = _voorvector(pand_geom, vbo_punt, wegdelen, zoekafstand_m, anker=anker)
     if f is None:
         if fouten is not None:
             fouten.voeg_toe(vhe_nummer, STAP, GEEN_VOORZIJDE)
         return [("achter", tuin)]
-    c = pand_geom.centroid
+    c = pand_geom.centroid if anker is None else anker
     x0, y0, x1, y1 = shapely.union(tuin, c).bounds
     lengte = 2 * math.hypot(x1 - x0, y1 - y0) + 1
     n = (-f[1], f[0])
@@ -426,8 +452,15 @@ def maak_tuinen(
             perceel = perceel_geom[str(perceel_id)]
             zaden = woon_zaden(perceel, woon, panden, v["vbo_id"],
                                verplicht=groep["bag_vbo_id"], eigen_pand=eigen_pand)  # fmt: skip
-            cellen = splits_perceel(perceel, zaden, panden, cfg.tuin.max_diepte_m)
-            n_zaden = len({(g.x, g.y) for g in zaden.geometry})
+            ruw = _ruwe_cellen(perceel, zaden, panden)
+            _, ruwe_cellen, z_punten = ruw
+            cellen = splits_perceel(perceel, zaden, panden, cfg.tuin.max_diepte_m, ruw=ruw)
+            cel_van = {
+                vid: ruwe_cellen[pt]
+                for vid, pt in zip(zaden["vbo_id"], z_punten, strict=True)
+            }
+            enkel_van = dict(zip(zaden["vbo_id"], zaden["enkel"], strict=True))
+            n_zaden = len(ruwe_cellen)
             methode = "perceel" if n_zaden == 1 else "gesplitst"
             gedeeld = dict(zip(zaden["vbo_id"], zaden["gedeeld"], strict=True))
         except Exception as e:  # één perceel stopt de stap nooit (N06)
@@ -438,16 +471,30 @@ def maak_tuinen(
         for rij in groep.itertuples():
             vhe = str(rij.vhe_nummer)
             try:
-                tuin = cellen.get(str(rij.bag_vbo_id))
+                vbo_id = str(rij.bag_vbo_id)
+                tuin = cellen.get(vbo_id)
                 if tuin is None or tuin.is_empty:
                     fouten.voeg_toe(vhe, STAP, f"geen tuinvlak op perceel {perceel_id}")
                     continue
-                if gedeeld.get(str(rij.bag_vbo_id), 1) > 1:
+                if gedeeld.get(vbo_id, 1) > 1:
                     fouten.voeg_toe(vhe, STAP, GEDEELD)
-                pand = panden.geometry.at[eigen_pand[str(rij.bag_vbo_id)]]
+                pand = panden.geometry.at[eigen_pand[vbo_id]]
+                anker = None
+                if not enkel_van.get(vbo_id, True):
+                    # meergezins-/rijpand als één BAG-pand: anker op eigen woningdeel (of vbo)
+                    deel_pand = (
+                        _vlakken(pand.intersection(cel_van[vbo_id]))
+                        if vbo_id in cel_van
+                        else Polygon()
+                    )
+                    if not deel_pand.is_empty:
+                        pand = deel_pand
+                    else:
+                        anker = rij.geometry
                 delen = deel_voor_achter(
                     tuin, pand, rij.geometry, wegdelen,
                     cfg.tuin.voorzijde_zoekafstand_m, fouten=fouten, vhe_nummer=vhe,
+                    anker=anker,
                 )  # fmt: skip
             except Exception as e:
                 log.exception("tuinvlak VHE %s mislukt", vhe)

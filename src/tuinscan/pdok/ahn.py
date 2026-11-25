@@ -16,6 +16,8 @@ from rasterio.transform import from_origin
 from rasterio.windows import from_bounds
 from shapely.geometry import box
 
+from tuinscan.bestanden import schrijf_atomair
+
 
 def kaartbladen_voor_bbox(index: gpd.GeoDataFrame, url_veld: str, bbox) -> list[str]:
     """URL's van kaartbladen die de bbox (RD) raken."""
@@ -41,7 +43,7 @@ def gdal_proxy_opties(env=None, systeem=None) -> dict[str, str]:
         proxy = systeem.get("https")
     if proxy and not env.get("GDAL_HTTP_PROXY"):
         opt["GDAL_HTTP_PROXY"] = proxy
-    ca = env.get("REQUESTS_CA_BUNDLE")
+    ca = env.get("REQUESTS_CA_BUNDLE") or env.get("SSL_CERT_FILE")
     if ca:
         if not env.get("GDAL_CURL_CA_BUNDLE"):
             opt["GDAL_CURL_CA_BUNDLE"] = ca
@@ -73,23 +75,30 @@ def lees_ahn(bronnen: list[str], bbox, doel: Path) -> Path:
             maxx = t0.c + math.ceil((bx1 - t0.c) / rx - 1e-9) * rx
             maxy = t0.f - math.floor((t0.f - by1) / ry + 1e-9) * ry
             miny = t0.f - math.ceil((t0.f - by0) / ry - 1e-9) * ry
-            b_, h_ = round((maxx - minx) / rx), round((maxy - miny) / ry)
+            b_ = max(1, round((maxx - minx) / rx))
+            h_ = max(1, round((maxy - miny) / ry))
             transform = from_origin(minx, maxy, rx, ry)
             data = np.full((h_, b_), fill, dtype=np.float32)
+            gevuld = np.zeros((h_, b_), dtype=bool)
             for d in datasets:
                 venster = from_bounds(minx, miny, maxx, maxy, d.transform)
                 deel = d.read(
                     1, window=venster, out_shape=(h_, b_), boundless=True,
-                    fill_value=float(fill), resampling=Resampling.nearest,
-                ).astype(np.float32)
-                leeg = data == fill
-                data[leeg] = deel[leeg]
+                    masked=True, resampling=Resampling.nearest,
+                )
+                waarden = np.asarray(deel.data, dtype=np.float32)
+                geldig = ~np.ma.getmaskarray(deel) & ~np.isnan(waarden)
+                neem = ~gevuld & geldig
+                if neem.any():
+                    data[neem] = waarden[neem]
+                    gevuld |= neem
         data = data[np.newaxis]
         nodata = float(fill)
-        with rasterio.open(
-            doel, "w", driver="GTiff", width=data.shape[2], height=data.shape[1],
-            count=1, dtype="float32", crs="EPSG:28992", transform=transform,
-            nodata=nodata, tiled=True, blockxsize=256, blockysize=256, compress="deflate",
-        ) as dst:
-            dst.write(data)
+        with schrijf_atomair(doel) as tmp:
+            with rasterio.open(
+                tmp, "w", driver="GTiff", width=data.shape[2], height=data.shape[1],
+                count=1, dtype="float32", crs="EPSG:28992", transform=transform,
+                nodata=nodata, tiled=True, blockxsize=256, blockysize=256, compress="deflate",
+            ) as dst:
+                dst.write(data)
     return doel

@@ -60,6 +60,7 @@ signalen:
   s2_hoogte_m: 2.0
   s3_hoogte_m: 1.0
   s3_buffer_m: 1.5
+  s3_max_hoogte_m: 4.5      # higher = street tree canopy, not garden overhang (0 = off)
   s4a_hoogte_m: 1.5
   s4a_min_m2: 2.0
   s4a_vorige_max_m: 1.0

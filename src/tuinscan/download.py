@@ -11,6 +11,7 @@ import geopandas as gpd
 import requests
 from rasterio.errors import RasterioIOError
 
+from tuinscan.bestanden import schrijf_atomair
 from tuinscan.config import Config
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.ahn import kaartbladen_voor_bbox, lees_ahn
@@ -59,8 +60,8 @@ def schrijf_vector(gdf: gpd.GeoDataFrame, pad: Path) -> list[str]:
                 lambda v: json.dumps(list(v)) if isinstance(v, (list, tuple)) else v
             )
             gecodeerd.append(kol)
-    pad.parent.mkdir(parents=True, exist_ok=True)
-    gdf.to_file(pad, driver="GPKG")
+    with schrijf_atomair(pad) as tmp:
+        gdf.to_file(tmp, driver="GPKG")
     return gecodeerd
 
 
@@ -85,8 +86,8 @@ def _laad_index(url: str, doel: Path, sessie: requests.Session, vernieuw: bool) 
     if vernieuw or not doel.exists():
         resp = sessie.get(url, timeout=60)
         resp.raise_for_status()
-        doel.parent.mkdir(parents=True, exist_ok=True)
-        doel.write_bytes(resp.content)
+        with schrijf_atomair(doel) as tmp:
+            tmp.write_bytes(resp.content)
     return gpd.read_file(doel)
 
 
@@ -103,10 +104,16 @@ def _ahn_bronnen(cfg: Config) -> list[tuple[str, str, str]]:
 
 
 def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRapport:
+    with requests.Session() as sessie:
+        return _download_met_sessie(cfg, mappen, vernieuw, sessie)
+
+
+def _download_met_sessie(
+    cfg: Config, mappen: Mappen, vernieuw: bool, sessie: requests.Session
+) -> DownloadRapport:
     bbox = _grow(cfg)
     rapport = DownloadRapport()
     manifest = Manifest(manifest_pad(mappen.cache))
-    sessie = requests.Session()
 
     def klaar(sleutel: str, pad: Path, verwacht: dict) -> bool:
         """Cache bruikbaar: zelfde bbox, niet leeg en dezelfde bron (url, laag, zoom, ...)."""
@@ -128,8 +135,13 @@ def voer_download_uit(cfg: Config, mappen: Mappen, vernieuw: bool) -> DownloadRa
         url = getattr(cfg.pdok, url_attr)
         if klaar(sleutel, pad, {"url": url, "collectie": cfg.pdok.collecties[coll]}):
             continue
-        gdf = haal_features(url, cfg.pdok.collecties[coll], bbox, sessie)
-        kolommen = schrijf_vector(gdf, pad)
+        try:
+            gdf = haal_features(url, cfg.pdok.collecties[coll], bbox, sessie)
+            kolommen = schrijf_vector(gdf, pad)
+        except (ValueError, OSError, requests.RequestException) as e:
+            rapport.mislukt[sleutel] = str(e)
+            log.warning("%s: mislukt (%s)", sleutel, e)
+            continue
         manifest.registreer(
             sleutel, url, bbox, {"collectie": cfg.pdok.collecties[coll],
                                  "aantal": len(gdf), "json_kolommen": kolommen}
