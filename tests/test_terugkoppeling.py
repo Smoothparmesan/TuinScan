@@ -148,7 +148,11 @@ def test_top20_criterion_text(capsys, tmp_path):
     schrijf_kwaliteit(kwaliteit(scores, terug), 20, tmp_path / "kwaliteit.csv")
     out = capsys.readouterr().out
     assert "Top-20 per wijk: 10 van 20 terecht" in out and "GEHAALD" in out and "NIET" not in out
-    assert (tmp_path / "kwaliteit.csv").exists()
+    assert ">= 50 %" in out and "≥" not in out  # Windows-console (cp1252) kent '≥' niet
+    tekst = (tmp_path / "kwaliteit.csv").read_bytes()
+    assert tekst.startswith(b"\xef\xbb\xbf")  # Nederlandse Excel: BOM, ';' en decimale komma
+    kw = pd.read_csv(tmp_path / "kwaliteit.csv", sep=";", decimal=",", encoding="utf-8-sig")
+    assert kw.set_index("onderdeel").loc["top_n", "precisie"] == 0.5
 
 
 def test_control_group_deterministic():

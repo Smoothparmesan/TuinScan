@@ -108,3 +108,23 @@ def test_voorbeeld_cli(miniwijk, capsys):
     out = capsys.readouterr().out
     assert "voorbeeld_export.xlsx" in out and "tobias.bestand" in out
     assert (miniwijk.mappen.invoer / "voorbeeld_export.xlsx").exists()
+
+
+def test_voorbeeld_open_in_excel_keeps_old_file(miniwijk, monkeypatch):
+    import os
+
+    from tuinscan import bestanden
+    from tuinscan.bestanden import BestandOpen
+
+    mw = miniwijk
+    pad = maak_voorbeeld_export(mw.cfg, mw.mappen, n=10, seed=3)
+    oud = pad.read_bytes()
+
+    def slot(a, b):
+        raise PermissionError(13, "in gebruik", str(b))
+
+    monkeypatch.setattr(bestanden.os, "replace", slot)
+    with pytest.raises(BestandOpen):
+        maak_voorbeeld_export(mw.cfg, mw.mappen, n=10, seed=4)
+    assert pad.read_bytes() == oud and sorted(os.listdir(pad.parent)).count(pad.name) == 1
+    assert not [n for n in os.listdir(pad.parent) if ".tmp" in n]

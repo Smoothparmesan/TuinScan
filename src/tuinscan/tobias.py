@@ -269,7 +269,7 @@ def _filter(df: pd.DataFrame, filters: dict[str, list]) -> pd.DataFrame:
 
 
 def lees_vhes(cfg: Config, mappen: Mappen, fouten: Foutenlijst) -> pd.DataFrame:
-    """Lees de export, pas mapping en filters toe, schrijf ronde_dir/vhe.parquet."""
+    """Lees de export en pas mapping en filters toe (schrijven: `schrijf_vhes`)."""
     t = cfg.tobias
     ruw = lees_ruwe_export(mappen.invoer / t.bestand, t.blad, t.kopregel)
     koppen = list(ruw.columns)
@@ -310,6 +310,9 @@ def lees_vhes(cfg: Config, mappen: Mappen, fouten: Foutenlijst) -> pd.DataFrame:
     opt = [v for v in OPTIONEEL if v in mapping]
     uit = pd.DataFrame(rijen, columns=kern + opt)
     uit = uit.astype(str) if len(uit) else uit.astype({c: "string" for c in uit.columns})
-    mappen.ronde_dir.mkdir(parents=True, exist_ok=True)
-    uit.to_parquet(mappen.ronde_dir / "vhe.parquet", index=False)
     return uit
+
+
+def schrijf_vhes(vhes: pd.DataFrame, pad: Path) -> None:
+    """Schrijf de ingelezen VHE's (ronde_dir/vhe.parquet; de stap kiest het moment)."""
+    vhes.to_parquet(pad, index=False)

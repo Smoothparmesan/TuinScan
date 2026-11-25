@@ -37,3 +37,19 @@ def test_ronde_with_path_chars_rejected(ronde):
 
     with pytest.raises(ConfigFout, match="ronde"):
         Mappen.uit_config(laad_config(EXAMPLE), ronde)
+
+
+@pytest.mark.parametrize(
+    "ronde", ["a*b", "a?b", 'a"b', "a<b", "a>b", "a|b", "CON", "con", "nul.txt", "COM1", "lpt9",
+              "AUX", "PRN", "ronde.", "ronde "],
+)  # fmt: skip
+def test_ronde_with_windows_invalid_name_rejected(ronde):
+    from tuinscan.config import ConfigFout
+
+    with pytest.raises(ConfigFout, match="ronde"):
+        Mappen.uit_config(laad_config(EXAMPLE), ronde)
+
+
+@pytest.mark.parametrize("ronde", ["console", "com10", "wijk-2026_1", "Nul punt"])
+def test_ronde_ordinary_names_ok(ronde):
+    assert Mappen.uit_config(laad_config(EXAMPLE), ronde).ronde_dir.name == ronde

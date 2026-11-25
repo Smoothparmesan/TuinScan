@@ -8,6 +8,23 @@ from pathlib import Path
 from tuinscan.config import Config, ConfigFout
 
 ONEDRIVE_ENV = ("OneDrive", "OneDriveCommercial", "OneDriveConsumer")
+ONGELDIGE_TEKENS = '/\\:*?"<>|'
+GERESERVEERD = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                *(f"LPT{i}" for i in range(1, 10))}  # fmt: skip
+
+
+def _ongeldige_ronde(naam: str) -> bool:
+    """Geen padtekens, geen Windows-verboden tekens of namen (ook 'con.txt'), geen punt of
+    spatie aan het eind (Windows haalt die stilzwijgend weg)."""
+    return (
+        not naam
+        or naam in (".", "..")
+        or ".." in naam
+        or any(c in naam for c in ONGELDIGE_TEKENS)
+        or any(ord(c) < 32 for c in naam)
+        or naam[-1] in ". "
+        or naam.split(".")[0].strip().upper() in GERESERVEERD
+    )
 
 
 class OneDriveFout(Exception):
@@ -24,8 +41,11 @@ class Mappen:
     @classmethod
     def uit_config(cls, cfg: Config, ronde: str | None) -> "Mappen":
         naam = ronde or cfg.gebied.naam
-        if not naam or naam in (".", "..") or any(c in naam for c in "/\\:") or ".." in naam:
-            raise ConfigFout(f"ronde: ongeldige naam {naam!r} (geen padtekens of '..')")
+        if _ongeldige_ronde(naam):
+            raise ConfigFout(
+                f"ronde: ongeldige naam {naam!r} (geen padtekens, '..', {ONGELDIGE_TEKENS[3:]}, "
+                "punt of spatie aan het eind, of Windows-namen als CON, NUL, COM1)"
+            )
         uitvoer = Path(cfg.mappen.uitvoer)
         return cls(
             invoer=Path(cfg.mappen.invoer),

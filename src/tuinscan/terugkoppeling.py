@@ -12,7 +12,9 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from tuinscan.bestanden import schrijf_atomair
 from tuinscan.config import Config
+from tuinscan.fouten import CSV_CODERING, CSV_SEP
 
 BLAD = "Terugkoppeling"
 LIJSTEN = "Lijsten"
@@ -118,8 +120,8 @@ def maak_terugkoppelbestand(lijst: pd.DataFrame, cfg: Config, pad: Path) -> Path
         lw.cell(row=i, column=5, value=r.groep)
     lw.sheet_state = "hidden"
     pad = Path(pad)
-    pad.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(pad)
+    with schrijf_atomair(pad) as tmp:
+        wb.save(tmp)
     return pad
 
 
@@ -253,12 +255,13 @@ def kwaliteit(scores: pd.DataFrame, terug: pd.DataFrame) -> pd.DataFrame:
 
 def schrijf_kwaliteit(kw: pd.DataFrame, top_n: int, pad: Path) -> None:
     """Schrijf kwaliteit.csv (NaN leeg), druk de tabel en het succescriterium af."""
-    kw.to_csv(pad, index=False, na_rep="")
+    with schrijf_atomair(Path(pad)) as tmp:  # Nederlandse Excel: ';' en decimale komma
+        kw.to_csv(tmp, index=False, na_rep="", sep=CSV_SEP, decimal=",", encoding=CSV_CODERING)
     print(kw.to_string(index=False, na_rep="-", float_format=lambda x: f"{x:.2f}"))
     r = kw[kw["onderdeel"] == "top_n"].iloc[0]
     m, k = int(r["n_beoordeeld"]), int(r["n_terecht"])
     gehaald = m > 0 and k / m >= CRITERIUM
     print(
-        f"Top-{top_n} per wijk: {k} van {m} terecht — succescriterium ≥ 50 %: "
+        f"Top-{top_n} per wijk: {k} van {m} terecht - succescriterium >= 50 %: "
         f"{'GEHAALD' if gehaald else 'NIET GEHAALD'}"
     )

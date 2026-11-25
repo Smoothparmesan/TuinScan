@@ -12,6 +12,7 @@ from tuinscan.tobias import (
     lees_ruwe_export,
     lees_vhes,
     normaliseer_bag_id,
+    schrijf_vhes,
     stel_mapping_voor,
 )
 
@@ -240,7 +241,9 @@ def test_writes_parquet_with_columns(tmp_path):
     assert list(df.columns[:6]) == [
         "vhe_nummer", "bag_vbo_id", "adres", "wijk", "complex", "woningtype",
     ]  # fmt: skip
-    pq = pd.read_parquet(mappen.ronde_dir / "vhe.parquet")
+    assert not (mappen.ronde_dir / "vhe.parquet").exists()  # schrijven doet de stap
+    schrijf_vhes(df, tmp_path / "vhe.parquet")
+    pq = pd.read_parquet(tmp_path / "vhe.parquet")
     assert list(pq["vhe_nummer"]) == ["1"]
 
 

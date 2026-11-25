@@ -6,6 +6,7 @@ import pytest
 
 from tuinscan import stappen
 from tuinscan.config import parameterset_hash
+from tuinscan.fouten import lees_foutenlijst
 from tuinscan.score import aggregeer_delen, bereken_score, schaal
 from tuinscan.stappen import stap_score, stap_tuinen
 
@@ -110,7 +111,7 @@ def test_one_bad_vhe_does_not_stop(miniwijk, monkeypatch):
 
     monkeypatch.setattr(stappen, "bereken_signalen", kapot)
     sc = stap_score(mw.cfg, mw.mappen)
-    fouten = pd.read_csv(mw.mappen.ronde_dir / "foutenlijst.csv", dtype=str)
+    fouten = lees_foutenlijst(mw.mappen.ronde_dir / "foutenlijst.csv")
     assert (fouten["stap"] == "score").sum() == 1
     assert len(sc) >= 1
 
@@ -149,7 +150,7 @@ def test_all_vhe_fail_no_crash(miniwijk, monkeypatch):
     rd = mw.mappen.ronde_dir
     assert len(sc) == 0 and len(pd.read_parquet(rd / "scores.parquet")) == 0
     assert len(gpd.read_file(rd / "tuinen.gpkg", layer="scores")) == 0
-    fouten = pd.read_csv(rd / "foutenlijst.csv", dtype=str)
+    fouten = lees_foutenlijst(rd / "foutenlijst.csv")
     assert (fouten["stap"] == "score").sum() >= 1
 
 

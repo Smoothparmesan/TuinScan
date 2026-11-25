@@ -14,9 +14,10 @@ import geopandas as gpd
 import pandas as pd
 
 from tuinscan import tobias
+from tuinscan.bestanden import schrijf_atomair, vervang_samen
 from tuinscan.config import Config, parameterset_hash
 from tuinscan.download import herkomst_uit_cache, lees_vector
-from tuinscan.fouten import Foutenlijst
+from tuinscan.fouten import Foutenlijst, lees_foutenlijst
 from tuinscan.koppeling import href_ids, koppel, koppelpercentage
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.cache import vector_pad
@@ -62,7 +63,7 @@ def _pct(p: float) -> str:
     return f"{round(p, 1):g}"
 
 
-def _schrijf_ronde_json(cfg: Config, mappen: Mappen) -> None:
+def _schrijf_ronde_json(cfg: Config, mappen: Mappen, pad: Path) -> None:
     t = cfg.tobias
     ronde = {
         "datum": date.today().isoformat(),
@@ -71,16 +72,13 @@ def _schrijf_ronde_json(cfg: Config, mappen: Mappen) -> None:
         "kolommen": tobias.laad_mapping(mappen.invoer / t.kolommen_bestand),
         "parameterset": parameterset_hash(cfg),
     }
-    (mappen.ronde_dir / "ronde.json").write_text(
-        json.dumps(ronde, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    pad.write_text(json.dumps(ronde, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _werk_ronde_json_bij(cfg: Config, mappen: Mappen, herkomst: dict) -> None:
+def _werk_ronde_json_bij(cfg: Config, mappen: Mappen, herkomst: dict, pad: Path) -> None:
     """Zet herkomst (lagen, AHN-versie en -kaartbladen) en de parameterset van de score."""
-    pad = mappen.ronde_dir / "ronde.json"
     try:
-        ronde = json.loads(pad.read_text(encoding="utf-8"))
+        ronde = json.loads((mappen.ronde_dir / "ronde.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         ronde = {}
     ronde["parameterset"] = parameterset_hash(cfg)
@@ -122,16 +120,17 @@ def stap_tuinen(cfg: Config, mappen: Mappen) -> TuinenRapport:
     pct = koppelpercentage(n_vhe, n_tuin)
 
     rd = mappen.ronde_dir
-    rd.mkdir(parents=True, exist_ok=True)
     uit = gpd.GeoDataFrame(
         tuinen[TUIN_KOLOMMEN], geometry=tuinen.geometry.values, crs=28992
     ).reset_index(drop=True)
-    gpkg = rd / "tuinen.gpkg"
-    gpkg.unlink(missing_ok=True)
-    uit.to_file(gpkg, layer=TUINEN_LAAG, driver="GPKG", promote_to_multi=True,
-                geometry_type="MultiPolygon")  # fmt: skip
-    fouten.schrijf(rd / "foutenlijst.csv")
-    _schrijf_ronde_json(cfg, mappen)
+    # tuinen.gpkg eerst: staat hij open in QGIS, dan blijft ook vhe.parquet ongewijzigd
+    with vervang_samen(rd / "tuinen.gpkg", rd / "vhe.parquet", rd / "foutenlijst.csv",
+                       rd / "ronde.json") as (gpkg, vhe_pad, fout_pad, ronde_pad):  # fmt: skip
+        uit.to_file(gpkg, layer=TUINEN_LAAG, driver="GPKG", promote_to_multi=True,
+                    geometry_type="MultiPolygon")  # fmt: skip
+        tobias.schrijf_vhes(vhes, vhe_pad)
+        fouten.schrijf(fout_pad)
+        _schrijf_ronde_json(cfg, mappen, ronde_pad)
 
     print(f"Koppeling + tuinvlak gelukt voor {n_tuin} van {n_vhe} VHE's ({_pct(pct)} %)")
     if pct < WAARSCHUW_PCT:
@@ -190,9 +189,8 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
     velden = cfg.pdok.velden
     fouten = Foutenlijst()
     fout_pad = rd / "foutenlijst.csv"
-    if fout_pad.exists():
-        bestaand = pd.read_csv(fout_pad, dtype=str, keep_default_na=False)
-        fouten.regels = [tuple(r) for r in bestaand.itertuples(index=False) if r[1] != SCORE_STAP]
+    bestaand = lees_foutenlijst(fout_pad)
+    fouten.regels = [tuple(r) for r in bestaand.itertuples(index=False) if r[1] != SCORE_STAP]
 
     try:
         gekoppeld = koppel(vhes, vbo, panden, percelen, velden, Foutenlijst())
@@ -256,9 +254,8 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
         })  # fmt: skip
         scores_geom.append(delen.geometry.union_all())
 
-    fouten.schrijf(fout_pad)  # eerst: de foutenlijst gaat nooit verloren
     kol_deel = ["vhe_nummer", "deel", "oppervlak_m2", *SIGNAAL_KOLOMMEN]
-    pd.DataFrame(deel_rijen, columns=kol_deel).to_parquet(rd / "signalen.parquet", index=False)
+    per_deel_df = pd.DataFrame(deel_rijen, columns=kol_deel)
     kol_score = [
         "vhe_nummer", "adres", "wijk", "complex", "score", "rang_in_wijk", *SIGNAAL_KOLOMMEN,
         *(f"bijdrage_{k}" for k in cfg.score), "reden_1", "reden_2", "reden_codes",
@@ -275,16 +272,23 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
             orde.groupby("wijk", sort=False).cumcount().add(1).reindex(scores.index)
         )
     scores = scores.reindex(columns=kol_score)
-    scores.to_parquet(rd / "scores.parquet", index=False)
 
     laag = scores[["vhe_nummer", "adres", "wijk", "complex", "score", "rang_in_wijk",
                    "reden_codes", "ontbrekend"]].copy()  # fmt: skip
     for k in ("reden_codes", "ontbrekend"):
         laag[k] = laag[k].map(_list_naar_tekst).astype(object)
-    gpd.GeoDataFrame(laag, geometry=scores_geom, crs=28992).to_file(
-        gpkg, layer="scores", driver="GPKG", promote_to_multi=True, geometry_type="MultiPolygon"
-    )
-    _werk_ronde_json_bij(cfg, mappen, herkomst)
+    # alles eerst naar tijdelijke bestanden; tuinen.gpkg (vaak open in QGIS) als eerste vervangen
+    with vervang_samen(gpkg, rd / "scores.parquet", rd / "signalen.parquet", fout_pad,
+                       rd / "ronde.json") as (g_tmp, sc_tmp, sig_tmp, f_tmp, r_tmp):  # fmt: skip
+        shutil.copy2(gpkg, g_tmp)
+        gpd.GeoDataFrame(laag, geometry=scores_geom, crs=28992).to_file(
+            g_tmp, layer="scores", driver="GPKG", promote_to_multi=True,
+            geometry_type="MultiPolygon",
+        )  # fmt: skip
+        scores.to_parquet(sc_tmp, index=False)
+        per_deel_df.to_parquet(sig_tmp, index=False)
+        fouten.schrijf(f_tmp)
+        _werk_ronde_json_bij(cfg, mappen, herkomst, r_tmp)
     print(f"Score berekend voor {len(scores)} VHE's; {len(fouten.regels)} regels in foutenlijst")
     return scores
 
@@ -299,11 +303,7 @@ def stap_rapport(cfg: Config, mappen: Mappen) -> Path:
     tuinen = gpd.read_file(gpkg, layer=TUINEN_LAAG)
     tuinen["vhe_nummer"] = tuinen["vhe_nummer"].astype(str)
     fout_pad = rd / "foutenlijst.csv"
-    fouten = (
-        pd.read_csv(fout_pad, dtype=str, keep_default_na=False)
-        if fout_pad.exists()
-        else pd.DataFrame(columns=["vhe_nummer", "stap", "reden"])
-    )
+    fouten = lees_foutenlijst(fout_pad)
     uitsneden = {}
     if len(scores):
         bronnen = bronnen_uit_cache(mappen)
@@ -322,7 +322,8 @@ def stap_rapport(cfg: Config, mappen: Mappen) -> Path:
     html = render_rapport(scores, uitsneden, ronde=rd.name, n_tuinen=len(tuinen), fouten=fouten,
                           kaartbladen=bladen)  # fmt: skip
     pad = rd / "rapport.html"
-    pad.write_text(html, encoding="utf-8")
+    with schrijf_atomair(pad) as tmp:
+        tmp.write_text(html, encoding="utf-8")
     print(f"Rapport met {len(scores)} VHE's geschreven naar {pad}")
     return pad
 
@@ -392,6 +393,11 @@ def _verwijder(pad: Path) -> bool:
     return True
 
 
+RONDE_KENMERK = ("ronde.json", "vhe.parquet", "tuinscan.log")
+# wat tuinscan in de cache zet (raster/ bevat ook de AHN-kaartbladindex)
+CACHE_ONDERDELEN = ("manifest.json", "manifest.json.tmp", "vector", "raster")
+
+
 def stap_opruimen(
     cfg: Config, mappen: Mappen, bevestiging: str, bewaar_correcties: bool = False
 ) -> list[Path]:
@@ -401,10 +407,16 @@ def stap_opruimen(
     naam = mappen.ronde_dir.name
     if bevestiging.strip() != naam:
         raise StapFout(f"bevestiging komt niet overeen met de ronde '{naam}'; niets verwijderd")
+    rd = mappen.ronde_dir
+    if rd.is_dir() and not rd.is_symlink() and not any((rd / k).exists() for k in RONDE_KENMERK):
+        raise StapFout(
+            f"{rd} lijkt geen ronde-map van tuinscan (geen {' of '.join(RONDE_KENMERK)}); "
+            "niets verwijderd"
+        )
     binnen = mappen.alle()
-    doelen = [mappen.ronde_dir]
-    if mappen.cache.exists():
-        doelen += sorted(mappen.cache.iterdir())
+    doelen = [rd]
+    # alleen wat tuinscan in de cache zet; andere bestanden in die map blijven staan
+    doelen += [mappen.cache / k for k in CACHE_ONDERDELEN]
     doelen += [mappen.invoer / cfg.tobias.bestand, mappen.invoer / VOORBEELD_BESTAND]
     if not bewaar_correcties:
         doelen.append(mappen.invoer / CORRECTIES)
@@ -440,7 +452,7 @@ def stap_alles(cfg: Config, mappen: Mappen) -> float:
         t0 = time.monotonic()
         try:
             functie()
-        except StapFout:
+        except (StapFout, PermissionError):  # PermissionError: bestand open, CLI meldt welk
             raise
         except Exception as e:
             log.exception("stap %s mislukt", naam)

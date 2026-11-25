@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import urllib.request
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -26,11 +27,18 @@ def kaartbladen_voor_bbox(index: gpd.GeoDataFrame, url_veld: str, bbox) -> list[
     return [str(u) for u in sel[url_veld]]
 
 
-def gdal_proxy_opties(env=None) -> dict[str, str]:
-    """GDAL-proxyopties uit de requests-omgevingsvariabelen (alleen indien niet al gezet)."""
+def gdal_proxy_opties(env=None, systeem=None) -> dict[str, str]:
+    """GDAL-proxyopties (alleen indien niet al gezet).
+
+    Proxy uit HTTPS_PROXY, anders uit de systeeminstellingen (`urllib.request.getproxies()`,
+    op Windows het register), zoals `requests` dat ook doet; GDAL leest die zelf niet.
+    """
     env = os.environ if env is None else env
     opt: dict[str, str] = {}
     proxy = env.get("HTTPS_PROXY") or env.get("https_proxy")
+    if not proxy:
+        systeem = urllib.request.getproxies() if systeem is None else systeem
+        proxy = systeem.get("https")
     if proxy and not env.get("GDAL_HTTP_PROXY"):
         opt["GDAL_HTTP_PROXY"] = proxy
     ca = env.get("REQUESTS_CA_BUNDLE")

@@ -9,6 +9,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
+from tuinscan.bestanden import schrijf_atomair
 from tuinscan.config import Config
 from tuinscan.koppeling import href_ids
 from tuinscan.mappen import Mappen
@@ -89,6 +90,6 @@ def maak_voorbeeld_export(cfg: Config, mappen: Mappen, n: int = 200, seed: int =
         for i, (rij, perceel) in enumerate(gekozen, start=1)
     ]  # fmt: skip
     pad = mappen.invoer / VOORBEELD_BESTAND
-    pad.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rijen, columns=KOPPEN).to_excel(pad, index=False)
+    with schrijf_atomair(pad) as tmp:
+        pd.DataFrame(rijen, columns=KOPPEN).to_excel(tmp, index=False)
     return pad

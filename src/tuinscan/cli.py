@@ -1,6 +1,7 @@
 """Commandoregel: één subcommando per stap."""
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -20,6 +21,61 @@ STAPPEN = {
     "opruimen": "Verwijder cache, ronde-uitvoer en exportbestanden",
     "terugkoppeling": "Maak of lees het terugkoppelbestand",
 }
+
+
+LOGBESTAND = "tuinscan.log"
+log = logging.getLogger("tuinscan")
+
+
+class _KortFormaat(logging.Formatter):
+    """Console: alleen niveau en melding, geen traceback (die staat in tuinscan.log)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        niveau = {"WARNING": "waarschuwing", "ERROR": "fout", "CRITICAL": "fout"}
+        return f"{niveau.get(record.levelname, record.levelname.lower())}: {record.getMessage()}"
+
+
+def _start_logging(mappen: Mappen, stap: str) -> tuple[list[logging.Handler], int]:
+    """INFO naar ronde_dir/tuinscan.log (UTF-8), WARNING kort naar de console.
+
+    `opruimen` schrijft geen logbestand: die verwijdert juist de ronde-map.
+    """
+    handlers: list[logging.Handler] = []
+    console = logging.StreamHandler(sys.stderr)
+    console.setLevel(logging.WARNING)
+    console.setFormatter(_KortFormaat())
+    handlers.append(console)
+    if stap != "opruimen":
+        mappen.ronde_dir.mkdir(parents=True, exist_ok=True)
+        bestand = logging.FileHandler(mappen.ronde_dir / LOGBESTAND, encoding="utf-8")
+        bestand.setLevel(logging.INFO)
+        bestand.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        handlers.append(bestand)
+    oud = log.level
+    log.setLevel(logging.INFO)
+    for h in handlers:
+        h._tuinscan = True  # herkenbaar, zodat een volgende aanroep niets dubbel logt
+        log.addHandler(h)
+    return handlers, oud
+
+
+def _stop_logging(handlers: list[logging.Handler], oud_niveau: int) -> None:
+    for h in handlers:
+        log.removeHandler(h)
+        h.close()  # Windows: anders blijft tuinscan.log vergrendeld
+    log.setLevel(oud_niveau)
+
+
+def _console_veilig() -> None:
+    """Tekens die de Windows-console (cp1252) niet kent, worden vervangen i.p.v. te crashen."""
+    for stroom in (sys.stdout, sys.stderr):
+        if hasattr(stroom, "reconfigure"):
+            try:
+                stroom.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
 
 
 def _basis(sp: argparse.ArgumentParser) -> None:
@@ -95,6 +151,7 @@ def _extra_stap(args, cfg, mappen) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _console_veilig()
     p = _parser()
     args = p.parse_args(argv)
     if args.stap is None:
@@ -107,6 +164,27 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigFout, OneDriveFout) as e:
         print(f"Fout: {e}", file=sys.stderr)
         return 1
+    handlers, oud = _start_logging(mappen, args.stap)
+    try:
+        from tuinscan.config import parameterset_hash
+
+        stap = " ".join(filter(None, (args.stap, getattr(args, "actie", None))))
+        log.info("stap %s gestart (ronde %s, parameterset %s)", stap, mappen.ronde_dir.name,
+                 parameterset_hash(cfg))  # fmt: skip
+        code = _voer_uit(args, cfg, mappen)
+        log.info("stap %s klaar (code %d)", stap, code)
+        return code
+    except PermissionError as e:
+        naam = e.filename or "een uitvoerbestand"
+        log.error("bestand niet te schrijven: %s", naam)
+        print(f"Fout: Sluit bestand {naam} (bijv. in QGIS/Excel) en probeer opnieuw",
+              file=sys.stderr)  # fmt: skip
+        return 1
+    finally:
+        _stop_logging(handlers, oud)
+
+
+def _voer_uit(args, cfg, mappen) -> int:
     if args.stap == "inspecteer":
         from tuinscan.inspecteer import inspecteer
 

@@ -67,3 +67,11 @@ def test_ahn_closes_datasets_when_open_fails(tmp_path):
     with pytest.raises(RasterioIOError):
         lees_ahn([str(tmp_path / "a.tif"), str(tmp_path / "ontbreekt.tif")], (0, 0, 5, 5),
                  tmp_path / "x.tif")
+
+
+def test_proxy_from_system_settings_when_env_absent():
+    o = gdal_proxy_opties({}, systeem={"https": "http://register:8080"})
+    assert o == {"GDAL_HTTP_PROXY": "http://register:8080"}
+    o = gdal_proxy_opties({"HTTPS_PROXY": "http://env:1"}, systeem={"https": "http://reg:2"})
+    assert o["GDAL_HTTP_PROXY"] == "http://env:1"
+    assert gdal_proxy_opties({}, systeem={}) == {}
