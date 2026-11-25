@@ -80,6 +80,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Fout: {e}", file=sys.stderr)
             return 1
         return 0
+    if args.stap == "rapport":
+        from tuinscan.stappen import StapFout, stap_rapport
+
+        try:
+            stap_rapport(cfg, mappen)
+        except (ConfigFout, StapFout) as e:
+            print(f"Fout: {e}", file=sys.stderr)
+            return 1
+        return 0
     print(f"Stap '{args.stap}': nog niet beschikbaar")
     return 2
 

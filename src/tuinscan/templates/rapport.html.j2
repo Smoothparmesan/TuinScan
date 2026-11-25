@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tuinscan – signaallijst</title>
+<style>
+:root {
+  --bg: #f6f7f4; --paneel: #ffffff; --tekst: #1f2a24; --zacht: #5d6b63; --lijn: #dde2dc;
+  --accent: #2f6b47; --balk: #8fbf9f; --balk-bg: #e7ece7; --waarsch-bg: #fff4d6;
+  --waarsch-tekst: #5c4300; --waarsch-lijn: #e3c466; --badge-bg: #f3e1dc; --badge-tekst: #7a2e1d;
+  --schaduw: rgba(0, 0, 0, .35);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121714; --paneel: #1b221e; --tekst: #e6ece7; --zacht: #9aa89f; --lijn: #2e3832;
+    --accent: #7cc79a; --balk: #4f8f69; --balk-bg: #2a332d; --waarsch-bg: #3a3012;
+    --waarsch-tekst: #f2dea0; --waarsch-lijn: #7d6a2a; --badge-bg: #4a2a22;
+    --badge-tekst: #f2b8a8; --schaduw: rgba(0, 0, 0, .65);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--tekst); line-height: 1.45;
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+h2 { font-size: 1.15rem; margin: 0 0 8px; }
+.banner { background: var(--waarsch-bg); color: var(--waarsch-tekst);
+  border: 1px solid var(--waarsch-lijn); border-radius: 8px; padding: 10px 14px;
+  font-weight: 600; margin: 12px 0 16px; }
+.meta { color: var(--zacht); margin: 2px 0; }
+.meta b { color: var(--tekst); font-weight: 600; }
+.tellers { display: flex; gap: 24px; flex-wrap: wrap; margin: 12px 0; }
+.teller b { display: block; font-size: 1.4rem; }
+.teller span { color: var(--zacht); font-size: .85rem; }
+.kiezer { margin: 16px 0; }
+.kiezer label { margin-right: 8px; font-weight: 600; }
+select { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--lijn);
+  background: var(--paneel); color: var(--tekst); }
+section.wijk { background: var(--paneel); border: 1px solid var(--lijn); border-radius: 10px;
+  padding: 14px 16px; margin: 0 0 20px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 880px; }
+th { text-align: left; font-size: .8rem; text-transform: uppercase; letter-spacing: .03em;
+  color: var(--zacht); border-bottom: 2px solid var(--lijn); padding: 6px 8px; }
+td { padding: 8px; border-bottom: 1px solid var(--lijn); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+td.rang { font-weight: 700; color: var(--zacht); width: 2.5em; }
+td.adres { font-weight: 600; }
+.vhe { color: var(--zacht); font-variant-numeric: tabular-nums; }
+.score { display: flex; align-items: center; gap: 8px; min-width: 120px;
+  font-variant-numeric: tabular-nums; font-weight: 700; }
+.balk { flex: 1; height: 8px; background: var(--balk-bg); border-radius: 4px; overflow: hidden; }
+.balk i { display: block; height: 100%; background: var(--balk); }
+.reden { margin: 0; }
+.reden + .reden { color: var(--zacht); }
+.thumbs { display: flex; gap: 6px; }
+.thumbs figure { margin: 0; text-align: center; }
+.thumbs img, .thumbs .geen { width: 108px; height: 108px; object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--lijn); display: block; background: var(--balk-bg); }
+.thumbs .geen { display: flex; align-items: center; justify-content: center; color: var(--zacht);
+  font-size: .75rem; }
+.thumbs figcaption { font-size: .7rem; color: var(--zacht); }
+.badge { display: inline-block; background: var(--badge-bg); color: var(--badge-tekst);
+  border-radius: 999px; padding: 1px 8px; font-size: .75rem; font-weight: 600; margin: 0 4px 2px 0; }
+a.knop { display: inline-block; padding: 5px 12px; border: 1px solid var(--accent);
+  border-radius: 6px; color: var(--accent); text-decoration: none; font-weight: 600; }
+a.knop:hover, a.knop:focus-visible { background: var(--accent); color: var(--paneel); }
+.overlay { display: none; position: fixed; inset: 0; background: var(--schaduw); z-index: 10;
+  overflow-y: auto; padding: 24px 16px; }
+.overlay:target { display: block; }
+.overlay .kader { max-width: 1100px; margin: 0 auto; background: var(--paneel);
+  border-radius: 10px; padding: 16px; }
+.overlay .kop { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.overlay .raster { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px; margin-top: 12px; }
+.overlay figure { margin: 0; }
+.overlay img { width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--lijn); }
+.overlay figcaption { color: var(--zacht); font-size: .85rem; margin-top: 2px; }
+.leeg { background: var(--paneel); border: 1px dashed var(--lijn); border-radius: 10px;
+  padding: 24px; text-align: center; color: var(--zacht); }
+footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid var(--lijn);
+  color: var(--zacht); font-size: .9rem; }
+footer ul { margin: 4px 0; padding-left: 20px; }
+@media print {
+  .kiezer, .knop, .overlay { display: none !important; }
+  body { background: #fff; color: #000; font-size: 11pt; }
+  section.wijk { break-inside: auto; border-color: #999; overflow: visible; }
+  tr { break-inside: avoid; }
+  table { min-width: 0; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Tuinscan – signaallijst</h1>
+  <p class="meta">Ronde: <b>{{ ronde }}</b></p>
+  <p class="banner" role="note">{{ banner }}</p>
+  {% if herkomst %}
+  <p class="meta">Herkomst: zomerfoto {{ herkomst.zomer_jaar }} (vorig jaar {{ herkomst.zomer_vorig_jaar }}),
+    winterfoto {{ herkomst.winter_jaar }}, hoogtedata: {{ herkomst.ahn_versie }},
+    parameterset <b>{{ herkomst.parameterset }}</b></p>
+  {% endif %}
+  <div class="tellers">
+    <div class="teller"><b>{{ n_vhe }}</b><span>VHE's gescoord</span></div>
+    <div class="teller"><b>{{ n_tuinen }}</b><span>tuinvlakken</span></div>
+    <div class="teller"><b>{{ n_fouten }}</b><span>regels in foutenlijst</span></div>
+  </div>
+</header>
+
+{% if wijken %}
+<div class="kiezer" id="kiezer" hidden>
+  <label for="wijkkeuze">Wijk</label>
+  <select id="wijkkeuze">
+    <option value="">Alle wijken</option>
+    {% for naam in wijken %}<option value="{{ naam }}">{{ naam }}</option>{% endfor %}
+  </select>
+</div>
+
+{% for naam, rijen in wijken.items() %}
+<section class="wijk" data-wijk="{{ naam }}">
+  <h2>{{ naam }} <span class="meta">({{ rijen|length }})</span></h2>
+  <table>
+    <thead><tr>
+      <th>Rang</th><th>Adres</th><th>VHE</th><th>Complex</th><th>Score</th>
+      <th>Redenen</th><th>Zomer nu | vorig jaar</th><th>Ontbrekend</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for r in rijen %}
+    <tr>
+      <td class="rang">{{ r.rang }}</td>
+      <td class="adres">{{ r.adres }}</td>
+      <td class="vhe">{{ r.vhe }}</td>
+      <td>{{ r.complex }}</td>
+      <td><div class="score"><span>{{ "%.0f"|format(r.score) }}</span>
+        <span class="balk"><i style="width: {{ [[r.score, 0]|max, 100]|min }}%"></i></span></div></td>
+      <td>{% if r.reden_1 %}<p class="reden">{{ r.reden_1 }}</p>{% endif %}
+          {% if r.reden_2 %}<p class="reden">{{ r.reden_2 }}</p>{% endif %}</td>
+      <td><div class="thumbs">
+        <figure>{% if r.thumb_nu %}<img src="{{ r.thumb_nu }}" alt="Zomer dit jaar" loading="lazy">
+          {% else %}<span class="geen">geen beeld</span>{% endif %}<figcaption>nu</figcaption></figure>
+        <figure>{% if r.thumb_vorig %}<img src="{{ r.thumb_vorig }}" alt="Zomer vorig jaar" loading="lazy">
+          {% else %}<span class="geen">geen beeld</span>{% endif %}<figcaption>vorig jaar</figcaption></figure>
+      </div></td>
+      <td>{% for s in r.ontbrekend %}<span class="badge">{{ s }} ontbreekt</span>{% endfor %}</td>
+      <td>{% if r.details %}<a class="knop" href="#d-{{ r.id }}">Detail</a>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+
+{% for naam, rijen in wijken.items() %}{% for r in rijen if r.details %}
+<div class="overlay" id="d-{{ r.id }}" role="dialog" aria-label="Detailbeelden {{ r.vhe }}">
+  <div class="kader">
+    <div class="kop"><h2>{{ r.adres }} <span class="meta">VHE {{ r.vhe }}</span></h2>
+      <a class="knop" href="#">Sluiten</a></div>
+    <div class="raster">
+      {% for bron, titel in r.details %}
+      <figure><a href="{{ bron }}"><img src="{{ bron }}" alt="{{ titel }}" loading="lazy"></a>
+        <figcaption>{{ titel }}</figcaption></figure>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endfor %}{% endfor %}
+{% else %}
+<p class="leeg">Geen scores in deze ronde. Draai eerst <code>tuinscan score</code> en controleer de foutenlijst.</p>
+{% endif %}
+
+<footer>
+  <h2>Foutenlijst</h2>
+  <p>{{ n_fouten }} regel{{ "" if n_fouten == 1 else "s" }} in foutenlijst.csv (zonder adressen).</p>
+  {% if per_stap %}<ul>{% for stap, n in per_stap %}<li>{{ stap }}: {{ n }}</li>{% endfor %}</ul>{% endif %}
+</footer>
+</main>
+<script>
+(function () {
+  var kiezer = document.getElementById("kiezer");
+  var keuze = document.getElementById("wijkkeuze");
+  if (!kiezer || !keuze) return;
+  kiezer.hidden = false;
+  keuze.addEventListener("change", function () {
+    document.querySelectorAll("section.wijk").forEach(function (s) {
+      s.style.display = (!keuze.value || s.dataset.wijk === keuze.value) ? "" : "none";
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
@@ -17,10 +18,12 @@ from tuinscan.fouten import Foutenlijst
 from tuinscan.koppeling import href_ids, koppel, koppelpercentage
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.cache import vector_pad
+from tuinscan.rapport import render_rapport
 from tuinscan.rasters import bouw_tuinrasters, bronnen_uit_cache, overhang_zone
 from tuinscan.score import aggregeer_delen, bereken_score
 from tuinscan.signalen import bereken_signalen
 from tuinscan.tuinvlak import STAP, maak_geldig, maak_tuinen, pas_correcties_toe
+from tuinscan.uitsneden import maak_uitsneden
 
 log = logging.getLogger(__name__)
 
@@ -267,3 +270,34 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
     )
     print(f"Score berekend voor {len(scores)} VHE's; {len(fouten.regels)} regels in foutenlijst")
     return scores
+
+
+def stap_rapport(cfg: Config, mappen: Mappen) -> Path:
+    """scores.parquet + tuinen.gpkg + foutenlijst.csv -> uitsneden en rapport.html."""
+    rd = mappen.ronde_dir
+    gpkg, sc_pad = rd / "tuinen.gpkg", rd / "scores.parquet"
+    if not gpkg.exists() or not sc_pad.exists():
+        raise StapFout(f"{gpkg} of {sc_pad} ontbreekt; draai eerst 'tuinscan score'")
+    scores = pd.read_parquet(sc_pad)
+    tuinen = gpd.read_file(gpkg, layer=TUINEN_LAAG)
+    tuinen["vhe_nummer"] = tuinen["vhe_nummer"].astype(str)
+    fout_pad = rd / "foutenlijst.csv"
+    fouten = (
+        pd.read_csv(fout_pad, dtype=str, keep_default_na=False)
+        if fout_pad.exists()
+        else pd.DataFrame(columns=["vhe_nummer", "stap", "reden"])
+    )
+    uitsneden = {}
+    if len(scores):
+        bronnen = bronnen_uit_cache(mappen)
+        geom = tuinen.groupby("vhe_nummer").geometry.agg(lambda g: g.union_all())
+        for vhe in scores["vhe_nummer"].astype(str):
+            try:
+                uitsneden[vhe] = maak_uitsneden(vhe, geom[vhe], bronnen, rd)
+            except Exception:  # geen beeld is geen reden om het rapport te laten falen (N06)
+                log.exception("uitsneden VHE %s mislukt", vhe)
+    html = render_rapport(scores, uitsneden, ronde=rd.name, n_tuinen=len(tuinen), fouten=fouten)
+    pad = rd / "rapport.html"
+    pad.write_text(html, encoding="utf-8")
+    print(f"Rapport met {len(scores)} VHE's geschreven naar {pad}")
+    return pad
