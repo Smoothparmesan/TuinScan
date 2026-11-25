@@ -96,3 +96,23 @@ def test_feature_id_kept():
     assert gdf.loc[0, "feature_id"] == "uuid-1"
     assert gdf.loc[0, "href"] == ["http://a/b/1", "http://a/b/2"]
     assert isinstance(gdf.loc[0, "href"], list)
+
+
+@responses.activate
+def test_bbox_keeps_fractional_metres():
+    responses.get(URL, json=_fc([]))
+    ogc.haal_features(BASIS, "pand", (121394.123, 1, 487000.5, 487100.0004), requests.Session())
+    q = parse_qs(urlparse(responses.calls[0].request.url).query)
+    assert q["bbox"] == ["121394.123,1,487000.5,487100"]
+
+
+@responses.activate
+def test_retry_on_connection_error(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(ogc.time, "sleep", sleeps.append)
+    responses.get(URL, body=requests.ConnectionError("weg"))
+    responses.get(URL, body=requests.Timeout("traag"))
+    responses.get(URL, json=_fc([_feat(1)]))
+    gdf = ogc.haal_features(BASIS, "pand", (1, 2, 3, 4), requests.Session())
+    assert len(gdf) == 1
+    assert sleeps == [2, 4]

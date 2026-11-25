@@ -15,14 +15,25 @@ TIMEOUT = 60
 
 def _get(sessie: requests.Session, url: str, params: dict | None) -> dict:
     for poging in range(len(BACKOFF) + 1):
-        resp = sessie.get(url, params=params, timeout=TIMEOUT)
+        laatste = poging == len(BACKOFF)
+        try:
+            resp = sessie.get(url, params=params, timeout=TIMEOUT)
+        except (requests.ConnectionError, requests.Timeout):
+            if laatste:
+                raise
+            time.sleep(BACKOFF[poging])
+            continue
         if resp.status_code != 429 and resp.status_code < 500:
             resp.raise_for_status()
             return resp.json()
-        if poging == len(BACKOFF):
+        if laatste:
             resp.raise_for_status()
         time.sleep(BACKOFF[poging])
     raise RuntimeError("onbereikbaar")  # pragma: no cover
+
+
+def _getal(v: float) -> str:
+    return f"{round(float(v), 3):.3f}".rstrip("0").rstrip(".")
 
 
 def haal_features(
@@ -35,7 +46,7 @@ def haal_features(
     """Haal alle features binnen bbox (RD) op en volg `links[rel=next]`."""
     url: str | None = f"{basis_url}/collections/{collectie}/items"
     params: dict | None = {
-        "bbox": ",".join(f"{v:g}" for v in bbox),
+        "bbox": ",".join(_getal(v) for v in bbox),
         "bbox-crs": RD,
         "crs": RD,
         "limit": limit,
