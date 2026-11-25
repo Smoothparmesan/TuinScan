@@ -301,3 +301,47 @@ def stap_rapport(cfg: Config, mappen: Mappen) -> Path:
     pad.write_text(html, encoding="utf-8")
     print(f"Rapport met {len(scores)} VHE's geschreven naar {pad}")
     return pad
+
+
+def stap_terugkoppeling_maak(cfg: Config, mappen: Mappen, overschrijf: bool = False) -> Path:
+    """Selecteer de bezoeklijst uit scores.parquet en schrijf terugkoppeling.xlsx."""
+    from tuinscan.terugkoppeling import (
+        heeft_oordelen,
+        maak_terugkoppelbestand,
+        selecteer_bezoeklijst,
+    )
+
+    rd = mappen.ronde_dir
+    pad = rd / "terugkoppeling.xlsx"
+    if not (rd / "scores.parquet").exists():
+        raise StapFout(f"{rd / 'scores.parquet'} ontbreekt; draai eerst 'tuinscan score'")
+    if pad.exists() and not overschrijf and heeft_oordelen(pad):
+        raise StapFout(
+            f"{pad} bevat al ingevulde oordelen; gebruik --overschrijf om ze te vervangen"
+        )
+    t = cfg.terugkoppeling
+    scores = pd.read_parquet(rd / "scores.parquet")
+    lijst = selecteer_bezoeklijst(scores, t.top_n, t.controlegroep_n, t.seed)
+    maak_terugkoppelbestand(lijst, cfg, pad)
+    print(f"Terugkoppelbestand met {len(lijst)} VHE's geschreven: {pad}")
+    return pad
+
+
+def stap_terugkoppeling_lees(cfg: Config, mappen: Mappen, bestand: str | None = None) -> Path:
+    """Lees het ingevulde Excel-bestand en schrijf kwaliteit.csv."""
+    from tuinscan.terugkoppeling import kwaliteit, lees_terugkoppeling, schrijf_kwaliteit
+
+    rd = mappen.ronde_dir
+    pad = Path(bestand) if bestand else rd / "terugkoppeling.xlsx"
+    if not (rd / "scores.parquet").exists():
+        raise StapFout(f"{rd / 'scores.parquet'} ontbreekt; draai eerst 'tuinscan score'")
+    try:
+        terug, meldingen = lees_terugkoppeling(pad, cfg)
+    except Exception as e:
+        raise StapFout(f"{pad} kan niet worden gelezen: {e}") from e
+    for m in meldingen:
+        print(m)
+    scores = pd.read_parquet(rd / "scores.parquet")
+    uit = rd / "kwaliteit.csv"
+    schrijf_kwaliteit(kwaliteit(scores, terug), cfg.terugkoppeling.top_n, uit)
+    return uit

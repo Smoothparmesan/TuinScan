@@ -18,15 +18,41 @@ STAPPEN = {
 }
 
 
+def _basis(sp: argparse.ArgumentParser) -> None:
+    sp.add_argument("--config", required=True, metavar="PAD", help="pad naar config-YAML")
+    sp.add_argument(
+        "--ronde", default=None, metavar="NAAM", help="rondenaam (standaard gebied.naam)"
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tuinscan", description="Rangschik tuinen op open geodata.")
     sub = p.add_subparsers(dest="stap", metavar="STAP")
     for naam, hulp in STAPPEN.items():
         sp = sub.add_parser(naam, help=hulp, description=hulp)
-        sp.add_argument("--config", required=True, metavar="PAD", help="pad naar config-YAML")
-        sp.add_argument(
-            "--ronde", default=None, metavar="NAAM", help="rondenaam (standaard gebied.naam)"
-        )
+        if naam == "terugkoppeling":
+            sub2 = sp.add_subparsers(dest="actie", metavar="ACTIE", required=True)
+            for actie, ahulp in (
+                ("maak", "Maak het terugkoppelbestand"),
+                ("lees", "Lees het ingevulde bestand en bereken kwaliteit"),
+            ):
+                ap = sub2.add_parser(actie, help=ahulp, description=ahulp)
+                _basis(ap)
+                if actie == "maak":
+                    ap.add_argument(
+                        "--overschrijf",
+                        action="store_true",
+                        help="overschrijf ook een bestand met ingevulde oordelen",
+                    )
+                else:
+                    ap.add_argument(
+                        "--bestand",
+                        default=None,
+                        metavar="PAD",
+                        help="ander Excel-bestand dan terugkoppeling.xlsx",
+                    )
+            continue
+        _basis(sp)
         if naam == "download":
             sp.add_argument("--vernieuw", action="store_true", help="haal alles opnieuw op")
             sp.add_argument("--lijst-lagen", action="store_true", help="toon WMTS-lagen en stop")
@@ -85,6 +111,18 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             stap_rapport(cfg, mappen)
+        except (ConfigFout, StapFout) as e:
+            print(f"Fout: {e}", file=sys.stderr)
+            return 1
+        return 0
+    if args.stap == "terugkoppeling":
+        from tuinscan.stappen import StapFout, stap_terugkoppeling_lees, stap_terugkoppeling_maak
+
+        try:
+            if args.actie == "maak":
+                stap_terugkoppeling_maak(cfg, mappen, args.overschrijf)
+            else:
+                stap_terugkoppeling_lees(cfg, mappen, args.bestand)
         except (ConfigFout, StapFout) as e:
             print(f"Fout: {e}", file=sys.stderr)
             return 1
