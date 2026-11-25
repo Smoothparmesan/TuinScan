@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<Capabilities
+    xmlns="http://www.opengis.net/wmts/1.0"
+    xmlns:ows="http://www.opengis.net/ows/1.1"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    version="1.0.0">
+  <ows:ServiceIdentification>
+    <ows:Title>Testfixture luchtfoto</ows:Title>
+    <ows:ServiceType>OGC WMTS</ows:ServiceType>
+  </ows:ServiceIdentification>
+  <Contents>
+    <Layer>
+      <ows:Title>Luchtfoto 2025 Ortho 25cm RGB</ows:Title>
+      <ows:WGS84BoundingBox>
+        <ows:LowerCorner>-1.65 48.04</ows:LowerCorner>
+        <ows:UpperCorner>12.43 56.11</ows:UpperCorner>
+      </ows:WGS84BoundingBox>
+      <ows:Identifier>2025_ortho25</ows:Identifier>
+      <Style>
+        <ows:Identifier>default</ows:Identifier>
+      </Style>
+      <Format>image/jpeg</Format>
+      <TileMatrixSetLink>
+        <TileMatrixSet>EPSG:28992</TileMatrixSet>
+      </TileMatrixSetLink>
+      <TileMatrixSetLink>
+        <TileMatrixSet>EPSG:3857</TileMatrixSet>
+      </TileMatrixSetLink>
+      <ResourceURL format="image/jpeg" resourceType="tile" template="https://example.test/wmts/2025_ortho25/{TileMatrixSet}/{TileMatrix}/{TileCol}/{TileRow}.jpeg" />
+    </Layer>
+    <Layer>
+      <ows:Title>Luchtfoto 2024 Ortho 25cm RGB</ows:Title>
+      <ows:WGS84BoundingBox>
+        <ows:LowerCorner>-1.65 48.04</ows:LowerCorner>
+        <ows:UpperCorner>12.43 56.11</ows:UpperCorner>
+      </ows:WGS84BoundingBox>
+      <ows:Identifier>2024_ortho25</ows:Identifier>
+      <Style>
+        <ows:Identifier>default</ows:Identifier>
+      </Style>
+      <Format>image/jpeg</Format>
+      <TileMatrixSetLink>
+        <TileMatrixSet>EPSG:28992</TileMatrixSet>
+      </TileMatrixSetLink>
+      <TileMatrixSetLink>
+        <TileMatrixSet>EPSG:3857</TileMatrixSet>
+      </TileMatrixSetLink>
+      <ResourceURL format="image/jpeg" resourceType="tile" template="https://example.test/wmts/2024_ortho25/{TileMatrixSet}/{TileMatrix}/{TileCol}/{TileRow}.jpeg" />
+    </Layer>
+    <TileMatrixSet>
+      <ows:Identifier>EPSG:3857</ows:Identifier>
+      <ows:SupportedCRS>EPSG:3857</ows:SupportedCRS>
+      <TileMatrix>
+        <ows:Identifier>14</ows:Identifier>
+        <ScaleDenominator>34123.67</ScaleDenominator>
+        <TopLeftCorner>-20037508.34 20037508.34</TopLeftCorner>
+        <TileWidth>256</TileWidth>
+        <TileHeight>256</TileHeight>
+        <MatrixWidth>16384</MatrixWidth>
+        <MatrixHeight>16384</MatrixHeight>
+      </TileMatrix>
+    </TileMatrixSet>
+    <TileMatrixSet>
+      <ows:Identifier>EPSG:28992</ows:Identifier>
+      <ows:SupportedCRS>EPSG:28992</ows:SupportedCRS>
+      <TileMatrix>
+        <ows:Identifier>14</ows:Identifier>
+        <ScaleDenominator>750.0</ScaleDenominator>
+        <TopLeftCorner>-285401.92 903401.92</TopLeftCorner>
+        <TileWidth>256</TileWidth>
+        <TileHeight>256</TileHeight>
+        <MatrixWidth>16384</MatrixWidth>
+        <MatrixHeight>16384</MatrixHeight>
+      </TileMatrix>
+      <TileMatrix>
+        <ows:Identifier>15</ows:Identifier>
+        <ScaleDenominator>375.0</ScaleDenominator>
+        <TopLeftCorner>-285401.92 903401.92</TopLeftCorner>
+        <TileWidth>256</TileWidth>
+        <TileHeight>256</TileHeight>
+        <MatrixWidth>32768</MatrixWidth>
+        <MatrixHeight>32768</MatrixHeight>
+      </TileMatrix>
+    </TileMatrixSet>
+  </Contents>
+</Capabilities>
