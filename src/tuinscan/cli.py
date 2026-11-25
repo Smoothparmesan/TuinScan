@@ -62,6 +62,15 @@ def main(argv: list[str] | None = None) -> int:
             f"niet geconfigureerd {r.niet_geconfigureerd}, leeg {r.leeg}, mislukt {r.mislukt}"
         )
         return 0
+    if args.stap == "tuinen":
+        from tuinscan.stappen import StapFout, stap_tuinen
+
+        try:
+            stap_tuinen(cfg, mappen)
+        except (ConfigFout, StapFout) as e:
+            print(f"Fout: {e}", file=sys.stderr)
+            return 1
+        return 0
     print(f"Stap '{args.stap}': nog niet beschikbaar")
     return 2
 
