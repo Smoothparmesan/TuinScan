@@ -19,6 +19,8 @@ class Foutenlijst:
         return len(self.regels)
 
     def vhe_nummers(self) -> set[str]:
+        """Alle VHE-nummers met een regel. Geen uitsluitlijst: bij een dubbel VHE-nummer
+        staat de eerste rij gewoon in de resultaten."""
         return {r[0] for r in self.regels}
 
     def schrijf(self, pad: Path) -> None:

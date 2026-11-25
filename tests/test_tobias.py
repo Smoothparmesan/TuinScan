@@ -242,3 +242,41 @@ def test_writes_parquet_with_columns(tmp_path):
     ]  # fmt: skip
     pq = pd.read_parquet(mappen.ronde_dir / "vhe.parquet")
     assert list(pq["vhe_nummer"]) == ["1"]
+
+
+def test_bag_id_numpy_float():
+    import numpy as np
+
+    assert normaliseer_bag_id(np.float64(363010000123456.0)) == "0363010000123456"
+
+
+def test_huisnummer_alias_beats_numeric_column(tmp_path):
+    p = maak_xlsx(
+        tmp_path / "x.xlsx",
+        [["Bouwjaar", "Huisnr", "Z"], [1965, 12, "a"], [1970, 14, "b"]],
+    )
+    v = stel_mapping_voor(lees_ruwe_export(p, None, None))
+    assert v["huisnummer"].kolom == "Huisnr"
+
+
+def test_excel_float_strings_in_bag_column(tmp_path):
+    rijen = [KOP, ["1", "3.63010000123456e+14", "N", "C", "t", "S", 1, ""]]
+    cfg, mappen = maak_omgeving(tmp_path, rijen, MAP)
+    df = lees_vhes(cfg, mappen, Foutenlijst())
+    assert list(df["bag_vbo_id"]) == ["0363010000123456"]
+
+
+def test_fout_rows_use_excel_row_numbers(tmp_path):
+    rijen = [
+        ["Export"],
+        [],
+        KOP,
+        ["1", BAG1, "N", "C", "t", "S", 1, ""],
+        ["1", BAG2, "N", "C", "t", "S", 2, ""],
+        [None, BAG2, "N", "C", "t", "S", 3, ""],
+    ]
+    cfg, mappen = maak_omgeving(tmp_path, rijen, MAP)
+    fouten = Foutenlijst()
+    lees_vhes(cfg, mappen, fouten)
+    assert "rij 5 genegeerd, eerste rij behouden" in fouten.regels[0][2]
+    assert fouten.regels[1][0] == "rij 6"

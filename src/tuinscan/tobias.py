@@ -129,7 +129,8 @@ def lees_ruwe_export(pad: Path, blad: str | None, kopregel: int | None) -> pd.Da
         koppen.append(naam)
     df = raw.iloc[kop_i + 1 :].copy()
     df.columns = koppen
-    return df.dropna(how="all").reset_index(drop=True)
+    # index = 0-based Excel-rijnummer, zodat meldingen naar de echte rij verwijzen
+    return df.dropna(how="all")
 
 
 # --- BAG-id -----------------------------------------------------------------------------------
@@ -140,7 +141,7 @@ def normaliseer_bag_id(waarde: object) -> str | None:
     if _leeg(waarde):
         return None
     try:
-        d = Decimal(repr(waarde)) if isinstance(waarde, float) else Decimal(str(waarde).strip())
+        d = Decimal(str(waarde).strip())
     except InvalidOperation:
         return None
     if not d.is_finite() or d != d.to_integral_value() or d < 0:
@@ -185,7 +186,7 @@ def stel_mapping_voor(df: pd.DataFrame) -> dict[str, MappingVoorstel]:
          "waarden zijn BAG-VBO-id's")  # fmt: skip
     kies("postcode", lambda w: bool(_POSTCODE.fullmatch(w)), 0.8, "hoog", "waarden zijn postcodes")
     for veld, aliassen in ALIASSEN.items():
-        if veld in voorstel or veld == "huisnummer":
+        if veld in voorstel:
             continue
         for kol in df.columns:
             if kol not in gebruikt and _norm_kop(kol) in aliassen:
@@ -283,13 +284,16 @@ def lees_vhes(cfg: Config, mappen: Mappen, fouten: Foutenlijst) -> pd.DataFrame:
     df = _filter(df, t.filters)
 
     rijen, gezien = [], set()
-    for i, rij in enumerate(df.to_dict("records"), start=1):
+    for idx, rij in zip(df.index, df.to_dict("records"), strict=True):
+        i = int(idx) + 1  # Excel-rijnummer (1-based, incl. koptekst)
         vhe = rij["vhe_nummer"] or f"rij {i}"
         if not rij["vhe_nummer"]:
             fouten.voeg_toe(vhe, STAP, "VHE-nummer ontbreekt")
             continue
         if vhe in gezien:
-            fouten.voeg_toe(vhe, STAP, "dubbel VHE-nummer; eerste rij gebruikt")
+            fouten.voeg_toe(
+                vhe, STAP, f"dubbel VHE-nummer (rij {i} genegeerd, eerste rij behouden)"
+            )
             continue
         gezien.add(vhe)
         bag = normaliseer_bag_id(rij["bag_vbo_id"])
