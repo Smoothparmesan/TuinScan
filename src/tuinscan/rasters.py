@@ -25,6 +25,7 @@ from rasterio.warp import reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
 from shapely.geometry.base import BaseGeometry
 
+from tuinscan.config import MAX_PANDMARGE_M
 from tuinscan.download import LUCHTFOTO_SLEUTELS, manifest_pad, raster_pad
 from tuinscan.mappen import Mappen
 from tuinscan.pdok.cache import Manifest
@@ -147,6 +148,9 @@ class TuinRasters:
     cir_vorig: Raster | None
     ndsm: Raster | None
     ndsm_vorig: Raster | None
+    # m van het pixelcentrum tot het dichtstbijzijnde BAG-pand (0 = erin), alleen voor
+    # tuinpixels; inf = buiten de tuin of geen pand binnen MAX_PANDMARGE_M; None = onbekend
+    pand_afstand: np.ndarray | None = None
 
 
 def _masker(geom: BaseGeometry | None, transform, vorm) -> np.ndarray:
@@ -166,10 +170,42 @@ def _ndsm(dtm_pad, dsm_pad, transform, vorm) -> Raster | None:
     return dsm[:1] - dtm[:1]
 
 
+def _lokaal(vlakken, gebied: BaseGeometry) -> list[BaseGeometry]:
+    """Geometrieën uit `vlakken` (GeoDataFrame/GeoSeries) die `gebied` raken, via de sindex."""
+    if vlakken is None or len(vlakken) == 0:
+        return []
+    geoms = getattr(vlakken, "geometry", vlakken)
+    idx = geoms.sindex.query(gebied, predicate="intersects")
+    return [g for g in geoms.iloc[idx] if g is not None and not g.is_empty]
+
+
+def _pand_afstand(panden, tuin_masker: np.ndarray, transform) -> np.ndarray:
+    """Afstand (m) van elk tuinpixelcentrum tot het dichtstbijzijnde pand; elders inf."""
+    afstand = np.full(tuin_masker.shape, np.inf, dtype=np.float32)
+    rijen, kolommen = np.nonzero(tuin_masker)
+    if rijen.size == 0:
+        return afstand
+    xs, ys = transform @ (kolommen + 0.5, rijen + 0.5)
+    zoek = shapely.box(xs.min(), ys.min(), xs.max(), ys.max()).buffer(MAX_PANDMARGE_M)
+    dichtbij = _lokaal(panden, zoek)
+    if dichtbij:
+        d = shapely.distance(shapely.points(xs, ys), shapely.union_all(dichtbij))
+        afstand[rijen, kolommen] = np.where(d <= MAX_PANDMARGE_M, d, np.inf)
+    return afstand
+
+
 def bouw_tuinrasters(
-    tuin: BaseGeometry, zone: BaseGeometry | None, bronnen: dict[str, Path | None], res: float
+    tuin: BaseGeometry,
+    zone: BaseGeometry | None,
+    bronnen: dict[str, Path | None],
+    res: float,
+    panden=None,
 ) -> TuinRasters:
-    """Alle rasters voor één tuin(deel) op het grid rond (tuin ∪ zone) + 1 m."""
+    """Alle rasters voor één tuin(deel) op het grid rond (tuin ∪ zone) + 1 m.
+
+    Met `panden` (GeoDataFrame/GeoSeries met BAG-panden) ook de afstand tot het dichtstbij-
+    zijnde pand per tuinpixel (scheve daken in de zomerfoto, hoogte-halo in AHN).
+    """
     geheel = tuin if zone is None or zone.is_empty else shapely.union(tuin, zone)
     x0, y0, x1, y1 = geheel.bounds
     m = VENSTER_MARGE_M
@@ -178,15 +214,17 @@ def bouw_tuinrasters(
     def foto(sleutel: str) -> Raster | None:
         return _venster(bronnen.get(sleutel), transform, vorm, Resampling.bilinear)
 
+    tuin_masker = _masker(tuin, transform, vorm)
     return TuinRasters(
         transform=transform, vorm=vorm,
-        tuin_masker=_masker(tuin, transform, vorm),
+        tuin_masker=tuin_masker,
         zone_masker=_masker(zone, transform, vorm),
         zomer_nu=foto("zomer_nu"), zomer_vorig=foto("zomer_vorig"),
         cir_nu=foto("cir_nu"), cir_vorig=foto("cir_vorig"),
         ndsm=_ndsm(bronnen.get("ahn_dtm"), bronnen.get("ahn_dsm"), transform, vorm),
         ndsm_vorig=_ndsm(bronnen.get("ahn_vorig_dtm"), bronnen.get("ahn_vorig_dsm"),
                          transform, vorm),
+        pand_afstand=None if panden is None else _pand_afstand(panden, tuin_masker, transform),
     )  # fmt: skip
 
 

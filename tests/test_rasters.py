@@ -240,3 +240,15 @@ def test_blok_in_p2_back_garden(miniwijk):
     assert blok.sum() * RES**2 == pytest.approx(
         (BLOK_P2[2] - BLOK_P2[0]) * (BLOK_P2[3] - BLOK_P2[1])
     )
+
+
+def test_pand_afstand_for_tuin_pixels(miniwijk):
+    tuin = rd_box(R1_ACHTER)  # grenst aan pand `rij` (y = 18)
+    bronnen = bronnen_uit_cache(miniwijk.mappen)
+    tr = bouw_tuinrasters(tuin, None, bronnen, RES, miniwijk.panden)
+    r, c = _pixel(tr, 3, 18.1)
+    assert tr.pand_afstand[r, c] == pytest.approx(0.125, abs=0.01)  # pixelcentrum
+    r, c = _pixel(tr, 3, 25.1)
+    assert tr.pand_afstand[r, c] == pytest.approx(7.125, abs=0.01)
+    assert np.isinf(tr.pand_afstand[~tr.tuin_masker]).all()  # alleen tuinpixels nodig
+    assert bouw_tuinrasters(tuin, None, bronnen, RES).pand_afstand is None

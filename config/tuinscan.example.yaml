@@ -64,6 +64,11 @@ signalen:
   s4a_min_m2: 2.0
   s4a_vorige_max_m: 1.0
   s4a_standaardberging_max_m2: 10
+  foto_pandmarge_m: 1.5     # summer ortho is not true-ortho: roofs lean metres over gardens; S1/S5 skip pixels this close to a BAG pand (0 = off)
+  s4a_groen_marge_m: 1.0    # dilate vegetation before "not green" (crown edges)
+  s4a_max_hoogte_m: 4.5     # higher = tree crown or roof, not a garden object
+  s4a_pandmarge_m: 1.0      # ignore AHN height halo next to BAG panden (0 = off)
+  s4a_opening_px: 1         # morphological opening radius (px) against fence lines (0 = off)
 score:   # gewicht, onder, boven
   S1: {gewicht: 25, onder: 0.0, boven: 0.30}
   S2: {gewicht: 20, onder: 0.05, boven: 0.40}

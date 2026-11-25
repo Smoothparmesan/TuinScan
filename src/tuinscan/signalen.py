@@ -84,11 +84,45 @@ def _pixel_m2(tr: TuinRasters) -> float:
     return abs(tr.transform.a * tr.transform.e)
 
 
+def _px(tr: TuinRasters, meter: float) -> int:
+    return int(round(meter / abs(tr.transform.a)))
+
+
+def _buiten_pandmarge(tr: TuinRasters, marge_m: float) -> np.ndarray:
+    """True waar het pixel verder dan `marge_m` van elk BAG-pand ligt (of geen marge/afstand)."""
+    if marge_m <= 0 or tr.pand_afstand is None:
+        return np.ones(tr.vorm, dtype=bool)
+    return tr.pand_afstand > marge_m
+
+
+def _verwijd(masker: np.ndarray, straal: int, vierkant: bool = False) -> np.ndarray:
+    """Binaire dilatatie met een schijf (of vierkant) van `straal` pixels; rand = False."""
+    if straal <= 0 or not masker.any():
+        return masker.copy()
+    h, b = masker.shape
+    p = np.pad(masker, straal)
+    uit = np.zeros_like(masker)
+    for dy in range(-straal, straal + 1):
+        for dx in range(-straal, straal + 1):
+            if vierkant or dy * dy + dx * dx <= straal * straal:
+                uit |= p[straal + dy : straal + dy + h, straal + dx : straal + dx + b]
+    return uit
+
+
+def _opening(masker: np.ndarray, straal: int) -> np.ndarray:
+    """Erosie dan dilatatie met een vierkant: verwijdert lijnen smaller dan 2*straal+1 px."""
+    if straal <= 0:
+        return masker
+    return _verwijd(~_verwijd(~masker, straal, vierkant=True), straal, vierkant=True) & masker
+
+
 def _twee_jaar(tr: TuinRasters, cfg: Config):
     """(geldig, veg_nu, veg_vorig) over dezelfde pixels in beide zomers, of None.
 
     CIR telt alleen mee als beide jaren CIR hebben: anders zou NDVI het groen in één
-    jaar wel en in het andere niet zien en de toename opblazen.
+    jaar wel en in het andere niet zien en de toename opblazen. Pixels binnen
+    `foto_pandmarge_m` van een BAG-pand tellen niet: de zomerfoto is niet loodrecht en
+    daken vallen er per vlucht anders over de tuin.
     """
     if tr.zomer_nu is None or tr.zomer_vorig is None:
         return None
@@ -97,6 +131,7 @@ def _twee_jaar(tr: TuinRasters, cfg: Config):
     h = cfg.signalen.schaduw_helderheid
     geldig = (
         tr.tuin_masker
+        & _buiten_pandmarge(tr, cfg.signalen.foto_pandmarge_m)
         & _ongemaskeerd(tr.zomer_nu, tr.zomer_vorig, cir_nu, cir_vorig)
         & ~schaduw(tr.zomer_nu, h)
         & ~schaduw(tr.zomer_vorig, h)
@@ -168,7 +203,10 @@ def _regio_labels(kandidaat: np.ndarray) -> tuple[np.ndarray, int]:
 def s4a_hoog_object(tr: TuinRasters, cfg: Config, negeer_berging: bool) -> float | None:
     """m² nieuwe hoge, niet-groene objecten in de tuin.
 
-    1. Objectpixels: in de tuin, geldig, ndsm > s4a_hoogte_m en geen begroeiing.
+    1. Objectpixels: in de tuin, geldig, s4a_hoogte_m < ndsm ≤ s4a_max_hoogte_m (hoger is
+       kruin of dak), niet binnen s4a_groen_marge_m van begroeiing en niet binnen
+       s4a_pandmarge_m van een BAG-pand (hoogte-halo); daarna een opening van
+       s4a_opening_px tegen schuttinglijnen.
     2. 8-verbonden regio's; alleen regio's ≥ s4a_min_m2 blijven over.
     3. Bij `negeer_berging` valt daarvan de grootste regio ≤ s4a_standaardberging_max_m2
        weg (vóór de vergelijking met de vorige AHN).
@@ -184,7 +222,10 @@ def s4a_hoog_object(tr: TuinRasters, cfg: Config, negeer_berging: bool) -> float
     tuin = tr.tuin_masker & ok
     if not tuin.any():
         return None
-    labels, n = _regio_labels(tuin & licht & ~veg & (ndsm > s.s4a_hoogte_m))
+    groen = _verwijd(veg, _px(tr, s.s4a_groen_marge_m))
+    hoogte = (ndsm > s.s4a_hoogte_m) & (ndsm <= s.s4a_max_hoogte_m)
+    kandidaat = tuin & licht & ~groen & hoogte & _buiten_pandmarge(tr, s.s4a_pandmarge_m)
+    labels, n = _regio_labels(_opening(kandidaat, s.s4a_opening_px))
     if n == 0:
         return 0.0
     a = _pixel_m2(tr)

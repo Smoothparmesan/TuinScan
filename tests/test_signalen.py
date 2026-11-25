@@ -55,7 +55,7 @@ def _tr(n: int = 10, **kw) -> TuinRasters:
         transform=from_origin(120000, 485000 + n * RES, RES, RES), vorm=(n, n),
         tuin_masker=np.ones((n, n), dtype=bool), zone_masker=np.zeros((n, n), dtype=bool),
         zomer_nu=_beeld(GRIJS, n), zomer_vorig=None, cir_nu=None, cir_vorig=None,
-        ndsm=None, ndsm_vorig=None,
+        ndsm=None, ndsm_vorig=None, pand_afstand=None,
     )  # fmt: skip
     velden.update(kw)
     return TuinRasters(**velden)
@@ -310,11 +310,11 @@ def test_signals_on_miniwijk(miniwijk):
     def rasters(huis, deel):
         g = tuin(huis, deel)
         zone = overhang_zone(g, mw.panden, voetpad, mw.begroeid, s.s3_buffer_m)
-        return bouw_tuinrasters(g, zone, bronnen, s.resolutie_m)
+        return bouw_tuinrasters(g, zone, bronnen, s.resolutie_m, mw.panden)
 
     r1 = bereken_signalen(rasters("R1", "achter"), cfg, negeer_berging=False)
-    r1_m2 = tuin("R1", "achter").area
-    assert r1["S1"] == pytest.approx(20 / r1_m2, abs=0.05)  # groenvlak 20 -> 40 m²
+    r1_m2 = tuin("R1", "achter").area - 6 * s.foto_pandmarge_m  # strook langs het pand telt niet
+    assert r1["S1"] == pytest.approx(20 / r1_m2, abs=0.02)  # groenvlak 20 -> 40 m²
     assert r1["S2"] == pytest.approx(0.0)  # 1 m hoog: onder s2_hoogte_m
     assert r1["S4a"] == pytest.approx(0.0)
 
@@ -368,3 +368,67 @@ def test_s1_compares_each_year_with_its_own_threshold():
     cfg = _cfg_lagen(cir_nu={"ndvi_drempel": 0.3}, cir_vorig={"ndvi_drempel": 0.2})
     assert s1_groentoename(tr, cfg) == pytest.approx(-1.0)
     assert s1_groentoename(tr, CFG) == pytest.approx(0.0)
+
+
+def _cfg_sig(**kw):
+    return dataclasses.replace(CFG, signalen=dataclasses.replace(CFG.signalen, **kw))
+
+
+def _afstand(n: int = 10, ver: float = 5.0) -> np.ndarray:
+    return np.full((n, n), ver, dtype=np.float32)
+
+
+def test_two_year_shares_skip_pixels_near_panden():
+    # rij 0-1 ligt binnen foto_pandmarge_m van een pand: daar valt een scheef dak in beeld
+    nu = _kleur(_beeld(GRIJS), (slice(0, 2),), GROEN)
+    afstand = _afstand()
+    afstand[0:2] = 1.0
+    tr = _tr(zomer_vorig=_beeld(GRIJS), zomer_nu=nu, pand_afstand=afstand)
+    assert s1_groentoename(tr, CFG) == pytest.approx(0.0)
+    assert s5_verharding(tr, CFG)[0] == pytest.approx(1.0)
+    assert s1_groentoename(tr, _cfg_sig(foto_pandmarge_m=0)) == pytest.approx(0.2)
+    alles_dichtbij = _tr(zomer_vorig=_beeld(GRIJS), zomer_nu=nu, pand_afstand=_afstand(ver=0.5))
+    assert s1_groentoename(alles_dichtbij, CFG) is None
+    assert s5_verharding(alles_dichtbij, CFG) == (None, None)
+
+
+def test_s4a_drops_halo_next_to_pand():
+    n = 40
+    ndsm = _blok(_hoogte(n), 2, 2, 8, 12)  # 6 m²
+    afstand = _afstand(n)
+    afstand[0:6] = 0.5  # bovenste 4 rijen van het blok binnen 1 m van een pand
+    tr = _tr(n, zomer_nu=_beeld(GRIJS, n), ndsm=ndsm, pand_afstand=afstand)
+    assert s4a_hoog_object(tr, CFG, False) == pytest.approx(3.0)
+    assert s4a_hoog_object(tr, _cfg_sig(s4a_pandmarge_m=0), False) == pytest.approx(6.0)
+
+
+def test_s4a_ignores_objects_above_max_height():
+    n = 40
+    hoog = _blok(_hoogte(n), 2, 2, 8, 8, z=6.0)  # boomkruin / dak: hoger dan 4,5 m
+    tr = _tr(n, zomer_nu=_beeld(GRIJS, n), ndsm=hoog)
+    assert s4a_hoog_object(tr, CFG, False) == 0.0
+    laag = _blok(_hoogte(n), 2, 2, 8, 8, z=4.0)
+    tr = _tr(n, zomer_nu=_beeld(GRIJS, n), ndsm=laag)
+    assert s4a_hoog_object(tr, CFG, False) == pytest.approx(4.0)
+
+
+def test_s4a_dilates_vegetation_before_not_green():
+    n = 40
+    ndsm = _hoogte(n, 3.0)  # alles 3 m hoog
+    zomer = _kleur(_beeld(GRIJS, n), (slice(None), slice(0, 10)), GROEN)  # kruin kol 0-9
+    # kol 10-12: niet-groene kruinrand (0,75 m) -> valt binnen s4a_groen_marge_m
+    ndsm[0, :, 13:] = 0.0
+    ndsm[0, 20:28, 30:38] = 3.0  # los grijs blok van 4 m², ver van de kruin
+    tr = _tr(n, zomer_nu=zomer, ndsm=ndsm)
+    assert s4a_hoog_object(tr, CFG, False) == pytest.approx(4.0)
+    assert s4a_hoog_object(tr, _cfg_sig(s4a_groen_marge_m=0), False) == pytest.approx(
+        4.0 + 40 * 3 * A
+    )
+
+
+def test_s4a_opening_removes_fence_lines():
+    n = 40
+    ndsm = _blok(_hoogte(n), 5, 0, 2, 40)  # schutting: 2 px (0,5 m) breed, 10 m lang = 5 m²
+    tr = _tr(n, zomer_nu=_beeld(GRIJS, n), ndsm=ndsm)
+    assert s4a_hoog_object(tr, CFG, False) == 0.0
+    assert s4a_hoog_object(tr, _cfg_sig(s4a_opening_px=0), False) == pytest.approx(5.0)

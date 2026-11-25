@@ -73,3 +73,8 @@ def test_empty_scores_renders_empty_state(miniwijk):
 def test_foutenlijst_summary_without_addresses(miniwijk):
     html, _ = _bouw(miniwijk)
     assert "Foutenlijst" in html and re.search(r"regels? in foutenlijst", html)
+
+
+def test_lean_caption_under_thumbnails(miniwijk):
+    html, _ = _bouw(miniwijk)
+    assert "zomerfoto niet loodrecht; daken kunnen meters over de tuin vallen" in html

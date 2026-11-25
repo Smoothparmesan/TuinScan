@@ -133,3 +133,28 @@ def test_hash_includes_per_layer_thresholds(tmp_path):
 
 def test_rijbaan_functies_in_config():
     assert "rijbaan lokale weg" in laad_config(EXAMPLE).pdok.rijbaan_functies
+
+
+def test_lean_and_halo_keys_in_config_and_hash(tmp_path):
+    s = laad_config(EXAMPLE).signalen
+    assert s.foto_pandmarge_m == 1.5 and s.s4a_groen_marge_m == 1.0
+    assert s.s4a_max_hoogte_m == 4.5 and s.s4a_pandmarge_m == 1.0 and s.s4a_opening_px == 1
+    basis = parameterset_hash(laad_config(EXAMPLE))
+    pad = _schrijf(tmp_path, lambda d: d["signalen"].update(foto_pandmarge_m=0))
+    assert parameterset_hash(laad_config(pad)) != basis
+
+
+@pytest.mark.parametrize(
+    "sleutel, waarde",
+    [
+        ("foto_pandmarge_m", -1.0),
+        ("s4a_pandmarge_m", 11.0),  # verder dan rasters zoekt
+        ("s4a_groen_marge_m", -0.5),
+        ("s4a_max_hoogte_m", 1.0),  # moet boven s4a_hoogte_m liggen
+        ("s4a_opening_px", -1),
+    ],
+)
+def test_lean_and_halo_bounds(tmp_path, sleutel, waarde):
+    pad = _schrijf(tmp_path, lambda d: d["signalen"].update({sleutel: waarde}))
+    with pytest.raises(ConfigFout, match=rf"signalen\.{sleutel}"):
+        laad_config(pad)

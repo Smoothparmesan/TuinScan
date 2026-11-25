@@ -214,7 +214,7 @@ def stap_score(cfg: Config, mappen: Mappen) -> pd.DataFrame:
             per_deel = []
             for r in delen.itertuples():
                 zone = overhang_zone(r.geometry, panden, voetpad, groen, s.s3_buffer_m)
-                tr = bouw_tuinrasters(r.geometry, zone, bronnen, s.resolutie_m)
+                tr = bouw_tuinrasters(r.geometry, zone, bronnen, s.resolutie_m, panden)
                 sig = bereken_signalen(tr, cfg, negeer)
                 per_deel.append((float(r.oppervlak_m2), sig))
                 deel_rijen.append({"vhe_nummer": vhe, "deel": r.deel,

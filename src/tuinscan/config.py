@@ -15,6 +15,8 @@ class ConfigFout(Exception):
     """Ongeldige configuratie; de melding noemt de YAML-sleutel."""
 
 
+MAX_PANDMARGE_M = 10.0  # rasters berekent de afstand tot panden tot zover
+
 # Optionele drempels per luchtfotolaag (luchtfoto.lagen.<laag>.<drempel>); zonder waarde
 # geldt signalen.<drempel>. Elke drempel hoort bij de laag waarvan hij de pixels beoordeelt.
 LAAG_DREMPELS = {
@@ -97,6 +99,11 @@ class Signalen:
     s4a_min_m2: float
     s4a_vorige_max_m: float
     s4a_standaardberging_max_m2: float
+    foto_pandmarge_m: float  # S1/S5: pixels zo dicht bij een BAG-pand tellen niet (0 = uit)
+    s4a_groen_marge_m: float  # begroeiing zoveel verwijden vóór "niet groen"
+    s4a_max_hoogte_m: float  # hoger = boomkruin of dak, geen tuinobject
+    s4a_pandmarge_m: float  # hoogte-halo langs BAG-panden negeren (0 = uit)
+    s4a_opening_px: int  # morfologische opening (straal in pixels) tegen schuttinglijnen
 
 
 @dataclass(frozen=True)
@@ -192,6 +199,16 @@ def _valideer(cfg: Config) -> None:
                 raise ConfigFout(f"ahn.vorige.{k}: ontbreekt")
     if not cfg.tuin.delen or not set(cfg.tuin.delen) <= {"voor", "achter"}:
         raise ConfigFout("tuin.delen: alleen 'voor' en/of 'achter' toegestaan")
+    s = cfg.signalen
+    for naam in ("foto_pandmarge_m", "s4a_pandmarge_m"):
+        if not 0 <= getattr(s, naam) <= MAX_PANDMARGE_M:
+            raise ConfigFout(f"signalen.{naam}: verwacht 0 t/m {MAX_PANDMARGE_M:g} m")
+    if s.s4a_groen_marge_m < 0:
+        raise ConfigFout("signalen.s4a_groen_marge_m: mag niet negatief zijn")
+    if s.s4a_opening_px < 0:
+        raise ConfigFout("signalen.s4a_opening_px: mag niet negatief zijn")
+    if not s.s4a_max_hoogte_m > s.s4a_hoogte_m:
+        raise ConfigFout("signalen.s4a_max_hoogte_m: moet groter zijn dan s4a_hoogte_m")
     for laag, spec in cfg.luchtfoto.lagen.items():
         for naam, lagen in LAAG_DREMPELS.items():
             if not isinstance(spec, dict) or naam not in spec:
