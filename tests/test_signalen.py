@@ -183,6 +183,26 @@ def test_s4a_existing_in_previous_ahn_ignored():
     assert s4a_hoog_object(tr, CFG, False) == pytest.approx(4.0)
 
 
+def test_s4a_berging_dropped_before_previous_ahn():
+    n = 40
+    oud = _blok(_hoogte(n), 2, 2, 8, 12)  # 6 m² berging, ook in vorige AHN
+    nu = _blok(oud.copy(), 20, 20, 8, 8)  # + nieuwe schuur 4 m²
+    tr = _tr(n, zomer_nu=_beeld(GRIJS, n), ndsm=nu, ndsm_vorig=oud)
+    assert s4a_hoog_object(tr, CFG, True) == pytest.approx(4.0)
+
+
+def test_s4a_counts_only_new_pixels_of_region():
+    n = 40
+    oud = _blok(_hoogte(n), 2, 2, 8, 12)  # 6 m² schuur, ook in vorige AHN
+    nu = _blok(oud.copy(), 10, 2, 4, 12)  # aanbouw 3 m² ertegenaan (één regio)
+    tr = _tr(n, zomer_nu=_beeld(GRIJS, n), ndsm=nu, ndsm_vorig=oud)
+    assert s4a_hoog_object(tr, CFG, False) == pytest.approx(3.0)
+    vorig = oud.copy()
+    vorig[0, 10:14, 2:14] = np.ma.masked  # vorige AHN ontbreekt op de aanbouw -> nieuw
+    tr = _tr(n, zomer_nu=_beeld(GRIJS, n), ndsm=nu, ndsm_vorig=vorig)
+    assert s4a_hoog_object(tr, CFG, False) == pytest.approx(3.0)
+
+
 def test_s4a_standaardberging_ignored():
     n = 40
     zes = _blok(_hoogte(n), 2, 2, 8, 12)  # 96 px = 6 m²
@@ -199,6 +219,18 @@ def test_s4a_standaardberging_ignored():
 
 def test_s4a_none_without_ndsm():
     assert s4a_hoog_object(_tr(), CFG, False) is None
+
+
+def test_masked_cir_falls_back_to_exg_per_pixel():
+    zomer = _kleur(_beeld(GRIJS), (slice(0, 2),), GROEN)  # rij 0-1 groen in RGB
+    cir = _kleur(_beeld(CIR_GRIJS), (slice(0, 5),), CIR_GROEN)  # rij 0-4 groen in CIR
+    cir[:, 0:3] = np.ma.masked  # CIR ontbreekt op rij 0-2
+    tr = _tr(zomer_nu=zomer, cir_nu=cir, ndsm=_hoogte(waarde=3.0))
+    # rij 0-1 via ExG, rij 2 geen begroeiing (alleen ExG), rij 3-4 via NDVI; noemer 100 px
+    assert s2_hoge_begroeiing(tr, CFG) == pytest.approx(0.4)
+    assert (
+        vegetatie(zomer, cir, CFG)[:, 0].tolist() == [True, True, False, True, True] + [False] * 5
+    )
 
 
 def test_s5_both_years():

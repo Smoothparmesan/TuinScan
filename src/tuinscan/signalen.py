@@ -52,12 +52,16 @@ def schaduw(rgb, helderheid: float) -> np.ndarray:
 
 
 def vegetatie(zomer, cir, cfg: Config) -> np.ndarray:
-    """Begroeiing: NDVI(cir) > ndvi_drempel OF ExG(zomer) > exg_drempel; NDVI-deel vervalt
-    als `cir` None is."""
+    """Begroeiing: NDVI(cir) > ndvi_drempel OF ExG(zomer) > exg_drempel.
+
+    Het NDVI-deel vervalt als `cir` None is, en per pixel waar `cir` gemaskeerd is
+    (daar alleen ExG).
+    """
     s = cfg.signalen
     veg = exg(zomer) > s.exg_drempel
     if cir is not None:
-        veg |= ndvi_cir(cir) > s.ndvi_drempel
+        cir_ok = ~np.ma.getmaskarray(cir).any(axis=0)
+        veg |= cir_ok & (ndvi_cir(cir) > s.ndvi_drempel)
     return veg
 
 
@@ -100,10 +104,13 @@ def _twee_jaar(tr: TuinRasters, cfg: Config):
 
 
 def _nu_met_hoogte(tr: TuinRasters, cfg: Config):
-    """(ongemaskeerd, geen schaduw, veg_nu, ndsm) voor dit jaar; None zonder zomer of ndsm."""
+    """(ongemaskeerd, geen schaduw, veg_nu, ndsm) voor dit jaar; None zonder zomer of ndsm.
+
+    CIR is per pixel optioneel: waar CIR gemaskeerd is, beslist ExG alleen.
+    """
     if tr.zomer_nu is None or tr.ndsm is None:
         return None
-    ok = _ongemaskeerd(tr.zomer_nu, tr.cir_nu, tr.ndsm)
+    ok = _ongemaskeerd(tr.zomer_nu, tr.ndsm)
     licht = ~schaduw(tr.zomer_nu, cfg.signalen.schaduw_helderheid)
     return ok, licht, vegetatie(tr.zomer_nu, tr.cir_nu, cfg), _data(tr.ndsm)[0]
 
@@ -157,12 +164,15 @@ def _regio_labels(kandidaat: np.ndarray) -> tuple[np.ndarray, int]:
 
 
 def s4a_hoog_object(tr: TuinRasters, cfg: Config, negeer_berging: bool) -> float | None:
-    """Totaal m² van 8-verbonden niet-groene regio's met ndsm > s4a_hoogte_m in de tuin.
+    """m² nieuwe hoge, niet-groene objecten in de tuin.
 
-    Elke regio ≥ s4a_min_m2; met ndsm_vorig telt een regio alleen als de gemiddelde
-    vorige hoogte < s4a_vorige_max_m (regio zonder vorige waarden telt mee, net als
-    zonder vorige AHN). Bij `negeer_berging` valt de grootste regio ≤
-    s4a_standaardberging_max_m2 weg.
+    1. Objectpixels: in de tuin, geldig, ndsm > s4a_hoogte_m en geen begroeiing.
+    2. 8-verbonden regio's; alleen regio's ≥ s4a_min_m2 blijven over.
+    3. Bij `negeer_berging` valt daarvan de grootste regio ≤ s4a_standaardberging_max_m2
+       weg (vóór de vergelijking met de vorige AHN).
+    4. Met ndsm_vorig tellen binnen de overgebleven regio's alleen "nieuwe" pixels
+       (ndsm_vorig < s4a_vorige_max_m of gemaskeerd); een regio blijft alleen als haar
+       nieuwe oppervlak ≥ s4a_min_m2. S4a = som van die (nieuwe) oppervlakken.
     """
     s = cfg.signalen
     nu = _nu_met_hoogte(tr, cfg)
@@ -175,22 +185,20 @@ def s4a_hoog_object(tr: TuinRasters, cfg: Config, negeer_berging: bool) -> float
     labels, n = _regio_labels(tuin & licht & ~veg & (ndsm > s.s4a_hoogte_m))
     if n == 0:
         return 0.0
-    m2 = np.bincount(labels.ravel(), minlength=n + 1)[1:] * _pixel_m2(tr)
-    telt = m2 >= s.s4a_min_m2
-    if tr.ndsm_vorig is not None:
-        vorig_ok = ~np.ma.getmaskarray(tr.ndsm_vorig)[0]
-        lab = labels.ravel()
-        aantal = np.bincount(lab, weights=vorig_ok.ravel(), minlength=n + 1)[1:]
-        som = np.bincount(lab, weights=(_data(tr.ndsm_vorig)[0] * vorig_ok).ravel(),
-                          minlength=n + 1)[1:]  # fmt: skip
-        gemiddeld = _deel(som, aantal)
-        telt &= (aantal == 0) | (gemiddeld < s.s4a_vorige_max_m)
-    regio = m2[telt]
+    a = _pixel_m2(tr)
+    lab = labels.ravel()
+    m2 = np.bincount(lab, minlength=n + 1)[1:] * a
+    houd = m2 >= s.s4a_min_m2
     if negeer_berging:
-        berging = regio[regio <= s.s4a_standaardberging_max_m2]
+        berging = np.flatnonzero(houd & (m2 <= s.s4a_standaardberging_max_m2))
         if berging.size:
-            regio = np.delete(regio, np.flatnonzero(regio == berging.max())[0])
-    return float(regio.sum())
+            houd[berging[np.argmax(m2[berging])]] = False
+    if tr.ndsm_vorig is not None:
+        vorig = tr.ndsm_vorig
+        nieuw = np.ma.getmaskarray(vorig)[0] | (_data(vorig)[0] < s.s4a_vorige_max_m)
+        m2 = np.bincount(lab, weights=nieuw.ravel(), minlength=n + 1)[1:] * a
+        houd &= m2 >= s.s4a_min_m2
+    return float(m2[houd].sum())
 
 
 def s5_verharding(tr: TuinRasters, cfg: Config) -> tuple[float | None, float | None]:
