@@ -2,7 +2,7 @@
 
 ## Status (2026-11-25)
 - PoC code klaar (plan-taken 1–15 + eindreview-fixes + "best of both"-patch). `uv run pytest -q`: 348 passed; `uv run ruff check .` schoon. Branch `claude/inspiring-bardeen-sbgqro`.
-- Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`. PDOK-feiten + kalibratie: `docs/pdok-bronnen.md`. Gebruik: `README.md` (volledig, NL) en `docs/HANDLEIDING.md` (korte handleiding).
+- Plan: `docs/superpowers/plans/2026-11-25-tuinscan-poc.md`. PDOK-feiten + kalibratie: `docs/pdok-bronnen.md`. Gebruik: `README.md` (volledig, NL) en `docs/HANDLEIDING.md` (stap-voor-stap voor gebruikers zonder IT-ervaring; ontwikkelaarsdeel staat alleen in README).
 - Spec (Claude Docs "Specsheet Tuinscan") bijgewerkt met de gemeten PDOK-feiten (zomer-CIR bestaat).
 
 ## Draaien
@@ -14,7 +14,10 @@
 - Zomerfoto's zijn geen true-ortho: daken hellen 0,5–2 m (Houten) tot 3,5–5 m (Amsterdam) → marges rond panden in config.
 - Amsterdam-centrum: 1 van 20 VHE's kreeg een tuin (dichte binnenstad zonder voortuinen); geen fout.
 
-## Recent (best-of-both-patch, 2026-11-25)
+## Recent
+- 2026-11-26: `docs/HANDLEIDING.md` herschreven voor niet-IT-gebruikers (PowerShell openen, YAML-regels, bbox via QGIS, kalibratie invullen, tuincorrecties via QGIS-export, uitgebreidere probleemtabel).
+
+## Best-of-both-patch (2026-11-25)
 - Overgenomen: één standaardberging per VHE (niet voor én achter), `*`-regel telt niet als VHE, atomaire schrijfacties, mislukte downloadlaag → exit 1, Retry-After + next-link-lusbeveiliging, extra configchecks, rasters één keer per stap open + DTM één keer per wijk gevuld, WMTS-mozaïek direct naar schijf, anker per woningdeel bij meergezinspand, veilige uitsnedenamen + oude uitsneden opruimen, terugkoppelbestand valideert blad/kolommen.
 - Nieuw: `signalen.s3_max_hoogte_m` (standaard 4.5, 0 = uit) — S3 negeert straatboomkruinen. Optionele sleutel (enige met standaardwaarde). Verandert scores + parameterset-hash.
 - Niet overgenomen: rijbaan-voorrang bij voor/achter (zou in hofjes-/bloemkoolwijken met voordeur aan voetpad en parkeerhof achter juist omklappen; `pdok.rijbaan_functies` zit niet in de parameterset-hash).
